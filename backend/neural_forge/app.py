@@ -2,22 +2,50 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import agent, code_exercises, mastery, datasets, game, ml, nn, playgrounds, predictions, rag, sandbox
+from . import (
+    agent,
+    backup,
+    capabilities,
+    code_exercises,
+    datasets,
+    document_rag,
+    evaluation,
+    game,
+    mastery,
+    mistakes,
+    ml,
+    nn,
+    playgrounds,
+    portfolio,
+    predictions,
+    prompts,
+    rag,
+    real_agent,
+    sandbox,
+    torch_engine,
+    tutor,
+)
 from .curriculum import AREAS, CONCEPTS, RANKS
 from .db import DB
+from .llm import ProviderError, get_provider
+from .user_datasets import DatasetStore, DatasetUploadError
 
 FRONTEND = Path(os.environ.get("NEURAL_FORGE_FRONTEND", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
+LOGGER = logging.getLogger("neural_forge")
 
 
 def _clean(o: Any):
@@ -52,6 +80,8 @@ class Settings(BaseModel):
     mode: int | None = None
     free_play: bool | None = None
     show_code: bool | None = None
+    language: str | None = None
+    default_model: str | None = None
 
 
 class Answer(BaseModel):
@@ -95,6 +125,117 @@ class Submit(BaseModel):
 
 class Code(BaseModel):
     code: str
+
+
+class TorchRun(BaseModel):
+    config: dict = Field(default_factory=dict)
+    name: str | None = None
+
+
+class ModelChat(BaseModel):
+    provider: str = "ollama"
+    model: str
+    messages: list[dict[str, str]]
+    stream: bool = False
+
+
+class TutorRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=4_000)
+    mode: str = "simple"
+    source: str = "offline"
+    concept_id: str | None = None
+    run_id: int | None = None
+    model: str | None = None
+    language: str = "en"
+
+
+class MistakeReview(BaseModel):
+    remembered: bool
+
+
+class PersonalRagQuery(BaseModel):
+    question: str = Field(min_length=1, max_length=4_000)
+    document_ids: list[str] | None = None
+    method: str = "hybrid"
+    top_k: int = Field(default=5, ge=1, le=20)
+    generation: str = "extractive"
+    model: str | None = None
+
+
+class AgentConfigurationRequest(BaseModel):
+    name: str = Field(default="Local Agent", max_length=100)
+    model: str = Field(min_length=1, max_length=160)
+    system_prompt: str = Field(default="You are a careful AI learning assistant.", max_length=4_000)
+    tools: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+    max_steps: int = Field(default=6, ge=1, le=12)
+    timeout_seconds: float = Field(default=60, ge=5, le=180)
+
+
+class AgentRunRequest(BaseModel):
+    request: str = Field(min_length=1, max_length=4_000)
+
+
+class AgentArenaRequest(BaseModel):
+    configuration_ids: list[str] = Field(min_length=2, max_length=4)
+    tasks: list[dict[str, Any]] = Field(min_length=1, max_length=10)
+
+
+class PromptCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    system: str = Field(default="", max_length=10_000)
+    user: str = Field(min_length=1, max_length=10_000)
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class PromptVersionCreate(BaseModel):
+    system: str = Field(default="", max_length=10_000)
+    user: str = Field(min_length=1, max_length=10_000)
+    variables: dict[str, Any] = Field(default_factory=dict)
+    change_note: str = Field(default="", max_length=500)
+
+
+class PromptExecute(BaseModel):
+    version: int = Field(ge=1)
+    variables: dict[str, Any] = Field(default_factory=dict)
+    model: str = Field(min_length=1, max_length=160)
+
+
+class EvaluationDatasetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    cases: list[dict[str, Any]] = Field(min_length=1, max_length=500)
+
+
+class EvaluationRunRequest(BaseModel):
+    outputs: dict[str, Any]
+    name: str | None = Field(default=None, max_length=100)
+
+
+class PortfolioCreateRequest(BaseModel):
+    run_id: int = Field(ge=1)
+    title: str = Field(default="", max_length=160)
+    problem: str = Field(default="", max_length=10_000)
+    dataset: str = Field(default="", max_length=2_000)
+    method: str = Field(default="", max_length=10_000)
+    metrics: Any = None
+    interpretation: str = Field(default="", max_length=10_000)
+    limitations: str = Field(default="", max_length=10_000)
+    next_steps: str = Field(default="", max_length=10_000)
+
+
+class PortfolioUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=160)
+    problem: str | None = Field(default=None, max_length=10_000)
+    dataset: str | None = Field(default=None, max_length=2_000)
+    method: str | None = Field(default=None, max_length=10_000)
+    metrics: Any = None
+    interpretation: str | None = Field(default=None, max_length=10_000)
+    limitations: str | None = Field(default=None, max_length=10_000)
+    next_steps: str | None = Field(default=None, max_length=10_000)
+
+
+class BackupRestoreRequest(BaseModel):
+    backup: dict[str, Any]
 
 
 BOUNDARY_MODELS = {"logistic_regression", "decision_tree", "random_forest", "knn", "naive_bayes", "gradient_boosting"}
@@ -151,6 +292,37 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app = FastAPI(title="NEURAL FORGE", default_response_class=SafeJSON)
     db = DB(db_path)
     app.state.db = db
+    dataset_store = DatasetStore(db)
+    document_store = document_rag.DocumentStore(db)
+
+    @app.middleware("http")
+    async def structured_request_log(request: Request, call_next):
+        started = time.perf_counter()
+        request_id = uuid.uuid4().hex[:12]
+        try:
+            response = await call_next(request)
+        except Exception:
+            LOGGER.exception(
+                json.dumps({"event": "request_error", "request_id": request_id, "method": request.method, "path": request.url.path})
+            )
+            raise
+        duration = round((time.perf_counter() - started) * 1000, 2)
+        if request.url.path.startswith("/api/"):
+            LOGGER.info(
+                json.dumps(
+                    {
+                        "event": "api_request",
+                        "request_id": request_id,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status": response.status_code,
+                        "duration_ms": duration,
+                    },
+                    separators=(",", ":"),
+                )
+            )
+        response.headers["X-Request-ID"] = request_id
+        return response
 
     @app.exception_handler(game.GameError)
     async def _game_error(_: Request, exc: game.GameError):
@@ -158,7 +330,23 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.exception_handler(KeyError)
     async def _key_error(_: Request, exc: KeyError):
-        return SafeJSON({"error": f"Unknown id: {exc}"}, status_code=404)
+        return SafeJSON({"error": f"Unknown id: {exc}", "code": "not_found"}, status_code=404)
+
+    @app.exception_handler(DatasetUploadError)
+    async def _dataset_error(_: Request, exc: DatasetUploadError):
+        return SafeJSON({"error": exc.message, "code": exc.code}, status_code=400)
+
+    @app.exception_handler(document_rag.DocumentError)
+    async def _document_error(_: Request, exc: document_rag.DocumentError):
+        return SafeJSON({"error": exc.message, "code": exc.code}, status_code=400)
+
+    @app.exception_handler(ProviderError)
+    async def _provider_error(_: Request, exc: ProviderError):
+        return SafeJSON({"error": exc.message, "code": exc.code}, status_code=exc.status)
+
+    @app.exception_handler(torch_engine.TorchUnavailableError)
+    async def _torch_error(_: Request, exc: torch_engine.TorchUnavailableError):
+        return SafeJSON({"error": str(exc), "code": "pytorch_unavailable"}, status_code=503)
 
     # ----------------------------------------------------------- static catalogue
     @app.get("/api/meta")
@@ -167,6 +355,36 @@ def create_app(db_path: str | None = None) -> FastAPI:
                     datasets=datasets.catalog(), models=ml.model_catalog(), predictions=predictions.catalog(),
                     agent=agent.catalog(), concepts={k: dict(name=v["name"], area=v["area"], branch=v["branch"]) for k, v in CONCEPTS.items()},
                     rag_corpus=rag.corpus_info())
+
+    # ----------------------------------------------------------- runtime capabilities & local models
+
+    @app.get("/api/system/capabilities")
+    def system_capabilities(refresh: bool = False):
+        return capabilities.system_capabilities(force=refresh)
+
+    @app.get("/api/models")
+    def local_models(provider: str = "ollama"):
+        selected = get_provider(provider)
+        health = selected.health_check()
+        if not health["reachable"]:
+            return {"provider": provider, "reachable": False, "models": [], "error": health.get("error")}
+        return {"provider": provider, "reachable": True, "models": selected.list_models()}
+
+    @app.get("/api/models/{model_name:path}")
+    def local_model_info(model_name: str, provider: str = "ollama"):
+        return get_provider(provider).model_info(model_name)
+
+    @app.post("/api/models/chat")
+    def local_model_chat(body: ModelChat):
+        selected = get_provider(body.provider)
+        if not body.stream:
+            return selected.chat(body.model, body.messages)
+
+        def events():
+            for event in selected.stream_chat(body.model, body.messages):
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
 
     # ----------------------------------------------------------- players
 
@@ -185,7 +403,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/p/{pid}/settings")
     def settings(pid: int, body: Settings):
-        return game.set_settings(db, pid, body.mode, body.free_play, body.show_code)
+        return game.set_settings(
+            db,
+            pid,
+            body.mode,
+            body.free_play,
+            body.show_code,
+            body.language,
+            body.default_model,
+        )
 
     @app.get("/api/p/{pid}/tree")
     def tree(pid: int):
@@ -233,6 +459,39 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/p/{pid}/data/{ds_id}")
     def data_profile(pid: int, ds_id: str):
         return game.profile(db, pid, ds_id)
+
+    # Personal Dataset Workspace. Client filenames are display metadata only; all
+    # storage paths are generated server-side by DatasetStore.
+    @app.get("/api/p/{pid}/datasets")
+    def personal_datasets(pid: int):
+        game._player(db, pid)
+        return dataset_store.list(pid)
+
+    @app.post("/api/p/{pid}/datasets")
+    async def upload_dataset(pid: int, file: UploadFile = File(...), name: str | None = Form(default=None)):
+        game._player(db, pid)
+        # SpooledUploadFile keeps bounded uploads out of application memory when
+        # possible; parse_upload independently enforces the hard byte limit.
+        return dataset_store.create_from_upload(pid, file.file, file.filename or "dataset", name, file.size)
+
+    @app.get("/api/p/{pid}/datasets/{dataset_id}")
+    def personal_dataset(pid: int, dataset_id: str, target: str | None = None):
+        return dataset_store.profile(pid, dataset_id, target)
+
+    @app.delete("/api/p/{pid}/datasets/{dataset_id}")
+    def delete_personal_dataset(pid: int, dataset_id: str):
+        if not dataset_store.delete(pid, dataset_id):
+            raise game.GameError("Uploaded dataset not found", 404)
+        return {"ok": True}
+
+    @app.get("/api/p/{pid}/datasets/{dataset_id}/scatter")
+    def personal_dataset_scatter(pid: int, dataset_id: str, x: str, y: str, color: str | None = None):
+        from . import datalab
+        frame = dataset_store.load(pid, dataset_id)
+        for column in (x, y, color):
+            if column and column not in frame.columns:
+                raise game.GameError(f"Unknown column {column}")
+        return datalab.scatter(frame, x, y, color)
 
     @app.get("/api/data/{ds_id}/scatter")
     def data_scatter(ds_id: str, x: str, y: str, color: str | None = None):
@@ -283,6 +542,258 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/rag/map")
     def rag_map(chunk_size: int = 60, overlap: int = 10, embedding: str = "lsa", q: str | None = None):
         return rag.embedding_map(q, dict(chunk_size=chunk_size, overlap=overlap, embedding=embedding))
+
+    # ----------------------------------------------------------- professional PyTorch / CNN labs
+
+    def checkpoint_path(pid: int, kind: str) -> tuple[str, Path]:
+        checkpoint_id = uuid.uuid4().hex
+        root = (Path(db.path).resolve().parent if db.path != ":memory:" else Path(os.environ.get("TMPDIR", "/tmp"))) / "checkpoints" / str(pid)
+        return checkpoint_id, root / f"{checkpoint_id}.pt"
+
+    @app.post("/api/p/{pid}/pytorch/train")
+    def pytorch_train(pid: int, body: TorchRun):
+        game._player(db, pid)
+        checkpoint_id, path = checkpoint_path(pid, "pytorch")
+        try:
+            result = torch_engine.train_tabular(body.config, path)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+        summary = {"engine": "pytorch", "device": result["device"], "final": result["final"], "duration_seconds": result["duration_seconds"]}
+        run_id = db.save_run(pid, "pytorch", result["config"], result, summary, name=body.name, context="open_lab")
+        return {"ok": True, "run_id": run_id, "checkpoint_id": checkpoint_id, "result": result, **game._after_run(db, pid)}
+
+    @app.post("/api/p/{pid}/cnn/train")
+    def cnn_train(pid: int, body: TorchRun):
+        game._player(db, pid)
+        checkpoint_id, path = checkpoint_path(pid, "cnn")
+        try:
+            result = torch_engine.train_cnn(body.config, path)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+        summary = {"engine": "pytorch", "device": result["device"], "final": result["final"], "duration_seconds": result["duration_seconds"]}
+        run_id = db.save_run(pid, "cnn", result["config"], result, summary, name=body.name, context="open_lab")
+        return {"ok": True, "run_id": run_id, "checkpoint_id": checkpoint_id, "result": result, **game._after_run(db, pid)}
+
+    # ----------------------------------------------------------- tutor & mistake journal
+
+    @app.post("/api/p/{pid}/tutor")
+    def ai_tutor(pid: int, body: TutorRequest):
+        game._player(db, pid)
+        try:
+            if body.source == "offline":
+                return tutor.curated_answer(db, pid, body.question, body.mode, concept_id=body.concept_id, run_id=body.run_id, language=body.language)
+            if body.source == "ollama":
+                if not body.model:
+                    raise game.GameError("Select a local model first.")
+                return tutor.local_llm_answer(db, pid, body.question, body.mode, body.model, concept_id=body.concept_id, run_id=body.run_id, language=body.language)
+            raise game.GameError("Unknown tutor source.")
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.get("/api/p/{pid}/mistakes")
+    def mistake_records(pid: int, status: str = "all", topic: str | None = None):
+        game._player(db, pid)
+        if status not in {"all", "unresolved", "mastered", "due"}:
+            raise game.GameError("Unknown mistake filter.")
+        return mistakes.list_records(db, pid, status, topic)
+
+    @app.post("/api/p/{pid}/mistakes/{mistake_id}/review")
+    def review_mistake(pid: int, mistake_id: int, body: MistakeReview):
+        try:
+            return mistakes.review(db, pid, mistake_id, body.remembered)
+        except KeyError as exc:
+            raise game.GameError("Mistake record not found", 404) from exc
+
+    # ----------------------------------------------------------- personal-document RAG
+
+    @app.get("/api/p/{pid}/documents")
+    def documents(pid: int):
+        game._player(db, pid)
+        return document_store.list(pid)
+
+    @app.post("/api/p/{pid}/documents")
+    async def upload_document(
+        pid: int,
+        file: UploadFile = File(...),
+        name: str | None = Form(default=None),
+        chunk_size: int = Form(default=180),
+        overlap: int = Form(default=30),
+    ):
+        game._player(db, pid)
+        return document_store.add(pid, file.file, file.filename or "document", name, chunk_size, overlap)
+
+    @app.delete("/api/p/{pid}/documents/{document_id}")
+    def delete_document(pid: int, document_id: str):
+        if not document_store.delete(pid, document_id):
+            raise game.GameError("Document not found", 404)
+        return {"ok": True}
+
+    @app.post("/api/p/{pid}/personal-rag/query")
+    def personal_rag_query(pid: int, body: PersonalRagQuery):
+        game._player(db, pid)
+        return document_rag.query(
+            db,
+            pid,
+            body.question,
+            document_ids=body.document_ids,
+            method=body.method,
+            top_k=body.top_k,
+            generation=body.generation,
+            model=body.model,
+        )
+
+    # ----------------------------------------------------------- real local-model agent lab
+
+    @app.get("/api/agent-tools")
+    def agent_tools():
+        return real_agent.catalog()
+
+    @app.get("/api/p/{pid}/agent-configurations")
+    def agent_configurations(pid: int):
+        game._player(db, pid)
+        return real_agent.list_configurations(db, pid)
+
+    @app.post("/api/p/{pid}/agent-configurations")
+    def create_agent_configuration(pid: int, body: AgentConfigurationRequest):
+        game._player(db, pid)
+        try:
+            return real_agent.create_configuration(db, pid, body.model_dump())
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.post("/api/p/{pid}/agent-configurations/{configuration_id}/clear-memory")
+    def clear_agent_memory(pid: int, configuration_id: str):
+        try:
+            return real_agent.clear_memory(db, pid, configuration_id)
+        except KeyError as exc:
+            raise game.GameError("Agent configuration not found", 404) from exc
+
+    @app.post("/api/p/{pid}/agent-configurations/{configuration_id}/run")
+    def run_real_agent(pid: int, configuration_id: str, body: AgentRunRequest):
+        try:
+            return real_agent.run_agent(db, pid, configuration_id, body.request)
+        except KeyError as exc:
+            raise game.GameError("Agent configuration not found", 404) from exc
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.get("/api/p/{pid}/agent-runs")
+    def real_agent_runs(pid: int, limit: int = 50):
+        game._player(db, pid)
+        return real_agent.list_runs(db, pid, limit)
+
+    @app.post("/api/p/{pid}/agent-arena")
+    def real_agent_arena(pid: int, body: AgentArenaRequest):
+        game._player(db, pid)
+        try:
+            return real_agent.run_arena(db, pid, body.configuration_ids, body.tasks)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    # ----------------------------------------------------------- prompt & central evaluation labs
+
+    @app.get("/api/p/{pid}/prompts")
+    def prompt_list(pid: int):
+        game._player(db, pid)
+        return prompts.list_prompts(db, pid)
+
+    @app.post("/api/p/{pid}/prompts")
+    def prompt_create(pid: int, body: PromptCreate):
+        game._player(db, pid)
+        try:
+            return prompts.create(db, pid, body.name, body.system, body.user, body.variables)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.get("/api/p/{pid}/prompts/{prompt_id}")
+    def prompt_detail(pid: int, prompt_id: str):
+        return prompts.get(db, pid, prompt_id)
+
+    @app.post("/api/p/{pid}/prompts/{prompt_id}/versions")
+    def prompt_add_version(pid: int, prompt_id: str, body: PromptVersionCreate):
+        try:
+            return prompts.add_version(db, pid, prompt_id, body.system, body.user, body.variables, body.change_note)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.post("/api/p/{pid}/prompts/{prompt_id}/execute")
+    def prompt_execute(pid: int, prompt_id: str, body: PromptExecute):
+        try:
+            return prompts.execute(db, pid, prompt_id, body.version, body.variables, body.model)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.get("/api/p/{pid}/evaluation-datasets")
+    def evaluation_dataset_list(pid: int):
+        game._player(db, pid)
+        return evaluation.list_datasets(db, pid)
+
+    @app.post("/api/p/{pid}/evaluation-datasets")
+    def evaluation_dataset_create(pid: int, body: EvaluationDatasetCreate):
+        game._player(db, pid)
+        try:
+            return evaluation.create_dataset(db, pid, body.name, body.cases)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.get("/api/p/{pid}/evaluation-datasets/{dataset_id}")
+    def evaluation_dataset_detail(pid: int, dataset_id: str):
+        return evaluation.get_dataset(db, pid, dataset_id)
+
+    @app.post("/api/p/{pid}/evaluation-datasets/{dataset_id}/run")
+    def evaluation_run(pid: int, dataset_id: str, body: EvaluationRunRequest):
+        try:
+            return evaluation.run_evaluation(db, pid, dataset_id, body.outputs, body.name)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    # ----------------------------------------------------------- portfolio and portable backups
+
+    @app.get("/api/p/{pid}/portfolio")
+    def portfolio_list(pid: int):
+        game._player(db, pid)
+        return portfolio.list_projects(db, pid)
+
+    @app.post("/api/p/{pid}/portfolio")
+    def portfolio_create(pid: int, body: PortfolioCreateRequest):
+        game._player(db, pid)
+        try:
+            values = body.model_dump()
+            run_id = values.pop("run_id")
+            return portfolio.create_from_run(db, pid, run_id, values)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.patch("/api/p/{pid}/portfolio/{project_id}")
+    def portfolio_update(pid: int, project_id: str, body: PortfolioUpdateRequest):
+        try:
+            return portfolio.update_project(db, pid, project_id, body.model_dump(exclude_unset=True))
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.get("/api/p/{pid}/portfolio/{project_id}/export")
+    def portfolio_export(pid: int, project_id: str, format: str = "markdown"):
+        try:
+            content, media_type = portfolio.export_project(portfolio.get_project(db, pid, project_id), format)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+        extension = {"markdown": "md", "html": "html", "json": "json"}.get(format, "txt")
+        return PlainTextResponse(content, media_type=media_type, headers={"Content-Disposition": f'attachment; filename="neural-forge-{project_id}.{extension}"'})
+
+    @app.get("/api/p/{pid}/backup")
+    def backup_export(pid: int):
+        try:
+            payload = backup.export_player(db, pid)
+        except ValueError as exc:
+            raise game.GameError(str(exc), 413) from exc
+        return JSONResponse(payload, headers={"Content-Disposition": f'attachment; filename="neural-forge-player-{pid}.json"'})
+
+    @app.post("/api/p/{pid}/restore")
+    def backup_restore(pid: int, body: BackupRestoreRequest):
+        try:
+            return backup.restore_player(db, pid, body.backup)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
 
     # ----------------------------------------------------------- missions, challenges, bosses
 

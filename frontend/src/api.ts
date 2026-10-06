@@ -1,32 +1,100 @@
-// Tiny typed-ish API client. All requests use relative URLs (/api/...) so the app works behind any proxy.
+// Typed API client. Relative URLs keep browser traffic on the preview/deployment origin.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type Any = any
 
+export type StructuredApplicationError = {
+  error?: string
+  message?: string
+  detail?: string | { msg?: string }[]
+  code?: string
+}
+
 export class ApiError extends Error {
   status: number
-  constructor(message: string, status: number) {
+  code?: string
+  constructor(message: string, status: number, code?: string) {
     super(message)
+    this.name = 'ApiError'
     this.status = status
+    this.code = code
+  }
+}
+
+/** Format unknown failures without throwing or exposing arbitrary object internals. */
+export function formatApiError(error: unknown, fallback = 'Something went wrong. Please try again.'): string {
+  try {
+    if (error instanceof ApiError || error instanceof Error) {
+      const message = typeof error.message === 'string' ? error.message.trim() : ''
+      return message ? message.slice(0, 600) : fallback
+    }
+    if (typeof error === 'string') return error.trim().slice(0, 600) || fallback
+    if (typeof error === 'number' || typeof error === 'boolean' || typeof error === 'bigint') return String(error)
+    if (!error || typeof error !== 'object') return fallback
+    const value = error as StructuredApplicationError
+    if (typeof value.error === 'string' && value.error.trim()) return value.error.trim().slice(0, 600)
+    if (typeof value.message === 'string' && value.message.trim()) return value.message.trim().slice(0, 600)
+    if (typeof value.detail === 'string' && value.detail.trim()) return value.detail.trim().slice(0, 600)
+    if (Array.isArray(value.detail)) {
+      const messages = value.detail.flatMap((item) => typeof item?.msg === 'string' ? [item.msg] : []).join('; ')
+      if (messages) return messages.slice(0, 600)
+    }
+    return fallback
+  } catch {
+    // Objects with throwing getters/proxies must not break the error UI.
+    return fallback
+  }
+}
+
+async function decodeResponse(res: Response): Promise<unknown> {
+  const type = res.headers.get('content-type') || ''
+  const text = await res.text()
+  if (!type.includes('application/json')) return text
+  if (!text) return null
+  try { return JSON.parse(text) } catch {
+    if (!res.ok) return { error: `The server returned an invalid response (HTTP ${res.status}).` }
+    throw new ApiError('The server returned malformed JSON.', res.status, 'malformed_response')
   }
 }
 
 async function request(method: string, url: string, body?: unknown): Promise<Any> {
-  const res = await fetch(url, {
-    method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
-  const ct = res.headers.get('content-type') || ''
-  const data = ct.includes('application/json') ? await res.json() : await res.text()
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+  } catch (error) {
+    throw new ApiError(`Network request failed: ${formatApiError(error)}`, 0, 'network_error')
+  }
+  const data = await decodeResponse(res)
   if (!res.ok) {
-    const msg = typeof data === 'object' ? data.error || JSON.stringify(data.detail || data) : String(data)
-    throw new ApiError(msg, res.status)
+    const structured = data && typeof data === 'object' ? data as StructuredApplicationError : null
+    throw new ApiError(formatApiError(structured || data, `Request failed (HTTP ${res.status}).`), res.status, structured?.code)
   }
   return data
 }
 
 export const get = (url: string) => request('GET', url)
 export const post = (url: string, body: unknown = {}) => request('POST', url, body)
+export const patch = (url: string, body: unknown = {}) => request('PATCH', url, body)
+export const del = (url: string) => request('DELETE', url)
+
+export async function upload(url: string, file: File, fields: Record<string, string | number> = {}): Promise<Any> {
+  const body = new FormData()
+  body.set('file', file, file.name)
+  Object.entries(fields).forEach(([key, value]) => body.set(key, String(value)))
+  let response: Response
+  try { response = await fetch(url, { method: 'POST', body }) } catch (error) {
+    throw new ApiError(`Upload failed: ${formatApiError(error)}`, 0, 'network_error')
+  }
+  const data = await decodeResponse(response)
+  if (!response.ok) {
+    const structured = data && typeof data === 'object' ? data as StructuredApplicationError : null
+    throw new ApiError(formatApiError(structured || data, `Upload failed (HTTP ${response.status}).`), response.status, structured?.code)
+  }
+  return data
+}
 
 export function qs(params: Record<string, unknown>): string {
   const p = new URLSearchParams()
@@ -37,7 +105,7 @@ export function qs(params: Record<string, unknown>): string {
   return s ? `?${s}` : ''
 }
 
-// player id is stored locally; all progress lives in the backend SQLite database
+// Player id is stored locally; learning progress itself lives in SQLite.
 const KEY = 'neural-forge-player'
 export const storedPlayer = (): number | null => {
   const v = localStorage.getItem(KEY)

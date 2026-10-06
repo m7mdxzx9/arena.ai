@@ -9,7 +9,7 @@ import functools
 import random
 import time
 
-from . import agent, bosses, code_exercises, datalab, datasets, mastery, missions, ml, nn, predictions, rag, sandbox
+from . import agent, bosses, code_exercises, datalab, datasets, mastery, missions, mistakes, ml, nn, predictions, rag, sandbox
 from .curriculum import AREAS, BRANCH_ORDER, CONCEPT_LIST, CONCEPTS, EQUIPMENT, RANKS, depth
 from .curriculum import generators as gen
 from .db import DB
@@ -158,7 +158,16 @@ def create_player(db: DB, name: str, mode: int) -> dict:
     return overview(db, pid)
 
 
-def set_settings(db: DB, pid: int, mode: int | None = None, free_play: bool | None = None, show_code: bool | None = None) -> dict:
+def set_settings(
+    db: DB,
+    pid: int,
+    mode: int | None = None,
+    free_play: bool | None = None,
+    show_code: bool | None = None,
+    language: str | None = None,
+    default_model: str | None = None,
+) -> dict:
+    """Update player preferences without replacing unknown/forward-compatible keys."""
     p = _player(db, pid)
     s = dict(p["settings"])
     fields = {}
@@ -172,6 +181,17 @@ def set_settings(db: DB, pid: int, mode: int | None = None, free_play: bool | No
         s["free_play"] = bool(free_play)
     if show_code is not None:
         s["show_code"] = bool(show_code)
+    if language is not None:
+        if language not in {"en", "ar"}:
+            raise GameError("Unsupported language. Choose 'en' or 'ar'.")
+        s["language"] = language
+    if default_model is not None:
+        # Model availability changes independently of saved settings. Keep only a
+        # bounded provider/model identifier; the Model Hub verifies it at use time.
+        value = str(default_model).strip()
+        if len(value) > 160 or any(ch in value for ch in "\r\n\0"):
+            raise GameError("Invalid model identifier.")
+        s["default_model"] = value or None
     fields["settings"] = s
     db.update_player(pid, **fields)
     return overview(db, pid)
@@ -458,20 +478,29 @@ def _summary_ml(cfg, res):
 
 
 def run_ml(db: DB, pid: int, cfg: dict, context: str | None = None, name: str | None = None) -> dict:
-    if cfg.get("dataset") not in datasets.REGISTRY:
+    dataset_id = str(cfg.get("dataset", ""))
+    frame = None
+    if dataset_id.startswith("user:"):
+        from .user_datasets import DatasetStore, DatasetUploadError
+        try:
+            frame = DatasetStore(db).load(pid, dataset_id.removeprefix("user:"))
+        except (KeyError, DatasetUploadError) as exc:
+            raise GameError("Uploaded dataset not found", 404) from exc
+    elif dataset_id not in datasets.REGISTRY:
         raise GameError("Unknown dataset")
     if cfg.get("model") not in ml.MODELS:
         raise GameError("Unknown model")
     exp = ml.Experiment.from_dict(cfg)
     try:
-        res = ml.run_experiment(exp)
+        res = ml.run_experiment(exp, frame)
     except ml.PipelineError as e:
         return dict(ok=False, **e.to_dict())
     full_cfg = dict(dataset=exp.dataset, target=exp.target, features=exp.features, model=exp.model, params=exp.params,
                     preprocessing={**ml.DEFAULT_PREP, **(exp.preprocessing or {})}, test_size=exp.test_size, seed=exp.seed,
                     cv_folds=exp.cv_folds, threshold=exp.threshold, extra_rows=exp.extra_rows)
     rid = db.save_run(pid, "ml", full_cfg, res, _summary_ml(full_cfg, res), name=name, context=context)
-    return dict(ok=True, run_id=rid, config=full_cfg, result=res, **_after_run(db, pid))
+    recorded = mistakes.record_ml_diagnostics(db, pid, rid, full_cfg, res)
+    return dict(ok=True, run_id=rid, config=full_cfg, result=res, mistakes_recorded=len(recorded), **_after_run(db, pid))
 
 
 def _after_run(db, pid) -> dict:
