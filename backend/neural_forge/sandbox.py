@@ -3,7 +3,8 @@
 Defence in depth for a *local, single-player* game:
   * separate subprocess (isolated mode `-I`, empty environment, temporary working directory),
   * wall-clock timeout + RLIMIT_CPU, RLIMIT_AS (memory), RLIMIT_FSIZE, RLIMIT_NOFILE,
-  * a Python audit hook that blocks networking, process spawning and writes outside the temp dir,
+  * a Python audit hook that blocks networking, process spawning, and file access outside the temp dir
+    (reads are additionally allowed inside the Python installation so lazy imports work),
   * output size caps.
 This is NOT a hardened multi-tenant sandbox. If you host Neural Forge for untrusted users, run the code runner
 inside a container/VM with no network (see docs/SECURITY.md).
@@ -25,17 +26,31 @@ MAX_OUT = 20_000
 HOOK = r'''
 BLOCK_PREFIX = ("socket.", "subprocess.", "os.system", "os.exec", "os.spawn", "os.fork", "os.posix_spawn", "os.kill",
                 "ctypes.", "shutil.rmtree", "os.rmdir", "winreg.", "urllib.", "http.", "ftplib.", "smtplib.", "webbrowser.")
+_REAL = os.path.realpath
+_TMP_REAL = _REAL(TMP)
+# reads are allowed only inside the sandbox dir and the Python installation (stdlib + site-packages for lazy imports)
+_READ_ROOTS = tuple(r for r in {_TMP_REAL, _REAL(sys.prefix), _REAL(sys.base_prefix), _REAL(sys.exec_prefix), "/usr/share/zoneinfo", "/dev/null"} if r != "/")
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+def _inside(p, roots):
+    return any(p == r or p.startswith(r.rstrip("/") + "/") for r in roots)
 def _hook(event, args):
     if event.startswith(BLOCK_PREFIX):
         raise PermissionError(f"Blocked in the Neural Forge sandbox: {event}")
-    if event == "open":
-        path, mode = args[0], args[1] if len(args) > 1 else "r"
-        if isinstance(mode, str) and any(c in mode for c in "wax+") and isinstance(path, (str, bytes)):
-            p = os.path.abspath(path if isinstance(path, str) else path.decode())
-            if not p.startswith(TMP):
-                raise PermissionError("Blocked: writing files outside the sandbox directory")
+    if event == "open" and args and isinstance(args[0], (str, bytes)):
+        path = args[0] if isinstance(args[0], str) else args[0].decode(errors="replace")
+        mode = args[1] if len(args) > 1 else "r"
+        flags = args[2] if len(args) > 2 and isinstance(args[2], int) else 0
+        p = _REAL(path)
+        writing = (isinstance(mode, str) and any(c in mode for c in "wax+")) or bool(flags & _WRITE_FLAGS)
+        if writing and not _inside(p, (_TMP_REAL,)):
+            raise PermissionError("Blocked: writing files outside the sandbox directory")
+        if not writing and not _inside(p, _READ_ROOTS):
+            raise PermissionError(f"Blocked: reading files outside the sandbox directory ({path})")
+    if event in ("os.listdir", "os.scandir") and args and isinstance(args[0], str):
+        if not _inside(_REAL(args[0]), _READ_ROOTS):
+            raise PermissionError("Blocked: listing directories outside the sandbox")
     if event in ("os.remove", "os.unlink", "os.rename") and args and isinstance(args[0], str):
-        if not os.path.abspath(args[0]).startswith(TMP):
+        if not _inside(_REAL(args[0]), (_TMP_REAL,)):
             raise PermissionError("Blocked: modifying files outside the sandbox directory")
 
 '''

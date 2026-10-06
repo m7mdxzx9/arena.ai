@@ -119,4 +119,16 @@ describe('gameplay flows', () => {
     expect(body()).toContain('DEFEATED')
     expect(errors).toEqual([])
   }, 180_000)
+
+  it('passes THE LEAK select phase by picking the leaky columns', async () => {
+    await nav('/boss/leak')
+    const opts = Array.from(document.querySelectorAll('label.option')) as HTMLElement[]
+    for (const name of ['collection_calls_after_due', 'days_since_last_payment_at_audit']) {
+      await click(opts.find((o) => (o.textContent || '').includes(name))!.querySelector('input')!)
+    }
+    await click(btn(/Strike/)!)
+    expect(body()).toContain('Hit!')
+    expect(body()).toMatch(/Phase 2/)
+    expect(errors).toEqual([])
+  }, 120_000)
 })

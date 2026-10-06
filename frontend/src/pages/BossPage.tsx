@@ -95,7 +95,7 @@ export default function BossPage({ id }: { id: string }) {
               <div className="col">
                 <p><b>{phase.prompt}</b></p>
                 {phase.options.map((o: string, i: number) => <label key={i} className={`option ${sel.includes(i) ? 'sel' : ''}`}><input type="checkbox" checked={sel.includes(i)} onChange={() => setSel(sel.includes(i) ? sel.filter((x) => x !== i) : [...sel, i])} /> <span className="mono">{o}</span></label>)}
-                <div><Btn kind="danger" disabled={sel.length === 0 || busy} onClick={() => send({ selected: sel })}>⚔️ Strike</Btn></div>
+                <div><Btn kind="danger" disabled={sel.length === 0 || busy} onClick={() => send({ selected: sel.map((i) => phase.options[i]) })}>⚔️ Strike</Btn></div>
               </div>
             )}
             {!['mcq', 'select'].includes(phase.kind) && (

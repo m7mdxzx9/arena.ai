@@ -180,7 +180,9 @@ def evaluate_phase(boss: dict, phase_idx: int, payload: dict, result: dict | Non
         ok = int(payload.get("answer", -1)) == ph["q"]["answer"]
         return dict(passed=ok, checks=[dict(label="Correct answer", passed=ok)], explanation=ph["q"]["explanation"], correct=ph["q"]["answer"])
     if ph["kind"] == "select":
-        chosen = sorted(set(payload.get("selected", [])))
+        raw = payload.get("selected", []) or []
+        # accept option labels or option indices
+        chosen = sorted({ph["options"][x] if isinstance(x, int) and 0 <= x < len(ph["options"]) else str(x) for x in raw})
         ok = chosen == ph["answer"]
         missing = sorted(set(ph["answer"]) - set(chosen)); extra = sorted(set(chosen) - set(ph["answer"]))
         return dict(passed=ok, checks=[dict(label="Found all", passed=not missing, value=f"{len(missing)} missed"),
