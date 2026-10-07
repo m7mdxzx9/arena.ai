@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { post, type Any } from '../api'
+import { del, patch, post, type Any } from '../api'
 import { useI18n, Ltr } from '../i18n'
 import { Btn, Card, ErrorBox, Loading, Pill, Select, Slider, Toggle, useApi, useGame } from '../ui'
 
@@ -23,6 +23,7 @@ export default function RealAgentPage() {
   const models = useApi<Any>('/api/models')
   const configs = useApi<Any[]>(`/api/p/${pid}/agent-configurations`)
   const [selectedId, setSelectedId] = useState('')
+  const [editing, setEditing] = useState(false)
   const [name, setName] = useState('Research Assistant')
   const [model, setModel] = useState(ov.player.settings.default_model || '')
   const [systemPrompt, setSystemPrompt] = useState('You are a careful AI learning assistant. Use tools only when needed and explain the result concisely.')
@@ -51,6 +52,20 @@ export default function RealAgentPage() {
       await configs.reload(); setSelectedId(config.id)
     } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
   }
+  const loadSelected = () => {
+    if (!selected) return
+    setName(selected.name); setModel(selected.model); setSystemPrompt(selected.system_prompt); setSelectedTools(selected.tools); setPermissions(selected.permissions); setMaxSteps(selected.max_steps); setEditing(true)
+  }
+  const save = async () => {
+    if (!selected) return
+    setBusy(true); setError(null)
+    try { await patch(`/api/p/${pid}/agent-configurations/${selected.id}`, { name, model: activeModel, system_prompt: systemPrompt, tools: selectedTools, permissions, max_steps: maxSteps, timeout_seconds: selected.timeout_seconds }); await configs.reload(); setEditing(false) } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
+  }
+  const remove = async () => {
+    if (!selected || !window.confirm(t('realAgent.deleteConfirm'))) return
+    setBusy(true); setError(null)
+    try { await del(`/api/p/${pid}/agent-configurations/${selected.id}`); setSelectedId(''); setEditing(false); setRun(null); await configs.reload() } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
+  }
   const execute = async () => {
     if (!selected || !request.trim()) return
     setBusy(true); setError(null); setRun(null)
@@ -76,7 +91,7 @@ export default function RealAgentPage() {
       {!models.data?.reachable && <div className="warn-box">{t('realAgent.requiresOllama')}</div>}
       <div className="grid g-side">
         <div className="col">
-          <Card title={t('realAgent.create')} icon="🤖">
+          <Card title={editing ? t('realAgent.edit') : t('realAgent.create')} icon="🤖">
             <label className="field"><span className="field-l">{t('realAgent.name')}</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
             <Select label={t('common.model')} value={activeModel} onChange={setModel} options={modelList.map((item: Any) => ({ value: item.name, label: item.name }))} />
             <label className="field"><span className="field-l">{t('realAgent.systemPrompt')}</span><textarea rows={5} value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} /></label>
@@ -85,16 +100,17 @@ export default function RealAgentPage() {
             <div className="field-l">{t('realAgent.permissions')}</div>
             {permissionOptions.map((permission) => <Toggle key={permission} label={<Ltr>{permission}</Ltr>} checked={permissions.includes(permission)} onChange={() => toggle(permissions, permission, setPermissions)} />)}
             <Slider label={t('realAgent.maxSteps')} value={maxSteps} min={1} max={12} onChange={setMaxSteps} />
-            <Btn onClick={create} disabled={busy || !activeModel}>{t('realAgent.create')}</Btn>
+            <div className="row">{editing ? <><Btn onClick={save} disabled={busy || !activeModel}>{t('common.save')}</Btn><Btn kind="ghost" onClick={() => setEditing(false)}>{t('common.cancel')}</Btn></> : <Btn onClick={create} disabled={busy || !activeModel}>{t('realAgent.create')}</Btn>}</div>
           </Card>
         </div>
         <div className="col">
           <Card title={t('realAgent.configs')} icon="🧰">
             {configs.loading && <Loading />}
             {!configs.data?.length && <p className="muted">{t('realAgent.noConfigs')}</p>}
-            {configs.data?.length ? <Select value={selected?.id || ''} onChange={setSelectedId} options={configs.data.map((config) => ({ value: config.id, label: `${config.name} · ${config.model}` }))} /> : null}
+            {configs.data?.length ? <Select value={selected?.id || ''} onChange={(value) => { setEditing(false); setSelectedId(value) }} options={configs.data.map((config) => ({ value: config.id, label: `${config.name} · ${config.model}` }))} /> : null}
             {selected && <>
               <div className="row"><Pill><Ltr>{selected.model}</Ltr></Pill><Pill>{selected.max_steps} steps</Pill>{selected.tools.map((tool: string) => <Pill key={tool} kind="cyan"><Ltr>{tool}</Ltr></Pill>)}</div>
+              <div className="row"><Btn small kind="ghost" onClick={loadSelected}>{t('realAgent.edit')}</Btn><Btn small kind="danger" onClick={remove}>{t('common.delete')}</Btn></div>
               <div className="row between"><b>{t('realAgent.memory')} ({selected.memory.length}/20)</b><Btn small kind="ghost" onClick={clearMemory}>{t('realAgent.clearMemory')}</Btn></div>
               {selected.memory.length ? selected.memory.map((item: Any, index: number) => <div className="info-box" key={index}>{item.note}</div>) : <small className="muted">—</small>}
               <label className="field"><span className="field-l">{t('realAgent.request')}</span><textarea rows={4} value={request} onChange={(event) => setRequest(event.target.value)} /></label>

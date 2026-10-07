@@ -13,9 +13,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from . import datasets
 from . import nn as educational_nn
@@ -201,14 +204,51 @@ def _save_checkpoint(model: Any, path: Path | None, metadata: dict[str, Any]) ->
     return {"id": path.stem, "format": "pytorch-state-dict", "metadata_file": meta_path.name}
 
 
-def train_tabular(config: dict[str, Any], checkpoint_path: Path | None = None) -> dict[str, Any]:
-    """Train a genuine configurable MLP on a bundled numeric classification dataset."""
+def train_tabular(config: dict[str, Any], checkpoint_path: Path | None = None, frame: Any | None = None) -> dict[str, Any]:
+    """Train a genuine configurable classification MLP.
+
+    Bundled numeric datasets preserve the NumPy-lab comparison path. A validated
+    player-owned frame may also be supplied; its train-fitted preprocessing handles
+    numeric and bounded categorical features without serializing an unsafe pipeline.
+    """
     _require_torch()
     started = time.perf_counter()
     dataset_name = str(config.get("dataset", "moons"))
-    if dataset_name not in educational_nn.NN_DATASETS:
-        raise ValueError("This PyTorch lab supports the same numeric datasets as the NumPy Neural Lab.")
-    X, y, features, classes = educational_nn.load_nn_data(dataset_name)
+    personal = frame is not None
+    preprocessing_summary: dict[str, Any]
+    if personal:
+        target = str(config.get("target", ""))
+        if not target or target not in frame.columns:
+            raise ValueError("Choose a target column from the uploaded dataset.")
+        requested = config.get("features")
+        features = [str(value) for value in requested] if isinstance(requested, list) else [str(column) for column in frame.columns if column != target]
+        features = list(dict.fromkeys(features))
+        if not features or len(features) > 100 or target in features or any(column not in frame.columns for column in features):
+            raise ValueError("Choose 1–100 valid feature columns that do not include the target.")
+        usable = frame.loc[frame[target].notna(), [*features, target]].copy()
+        if len(usable) < 20:
+            raise ValueError("At least 20 rows with a non-missing target are required for PyTorch training.")
+        labels = usable[target].astype(str)
+        classes = sorted(labels.unique().tolist())
+        if not 2 <= len(classes) <= 100:
+            raise ValueError("PyTorch classification requires 2–100 target classes.")
+        class_to_index = {label: index for index, label in enumerate(classes)}
+        y = labels.map(class_to_index).to_numpy(dtype="int64")
+        counts = np.bincount(y)
+        if counts.min() < 2:
+            raise ValueError("Every target class needs at least two rows for a stratified validation split.")
+        numeric_features = [column for column in features if usable[column].dtype.kind in "biufc"]
+        categorical_features = [column for column in features if column not in numeric_features]
+        estimated_width = len(numeric_features) + sum(min(int(usable[column].nunique(dropna=True)), 200) for column in categorical_features)
+        if estimated_width > 2_048:
+            raise ValueError("Categorical features would expand beyond 2,048 inputs. Remove high-cardinality columns.")
+        raw_features = usable[features]
+    else:
+        if dataset_name not in educational_nn.NN_DATASETS:
+            raise ValueError("Unknown bundled dataset. Use a player-owned dataset identifier with target/features for custom training.")
+        X, y, features, classes = educational_nn.load_nn_data(dataset_name)
+        numeric_features, categorical_features = list(features), []
+        raw_features = None
     if len(classes) < 2:
         raise ValueError("The target must contain at least two classes.")
 
@@ -229,11 +269,34 @@ def train_tabular(config: dict[str, Any], checkpoint_path: Path | None = None) -
     _seed_everything(seed)
 
     train_idx, val_idx = train_test_split(
-        np.arange(len(X)), test_size=validation_size, random_state=seed, stratify=y
+        np.arange(len(y)), test_size=validation_size, random_state=seed, stratify=y
     )
-    scaler = StandardScaler().fit(X[train_idx])
-    X_train = scaler.transform(X[train_idx]).astype("float32")
-    X_val = scaler.transform(X[val_idx]).astype("float32")
+    if personal:
+        transformers = []
+        if numeric_features:
+            transformers.append(("numeric", Pipeline([("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())]), numeric_features))
+        if categorical_features:
+            transformers.append(("categorical", Pipeline([("impute", SimpleImputer(strategy="most_frequent")), ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False, max_categories=200))]), categorical_features))
+        preprocessor = ColumnTransformer(transformers, remainder="drop", sparse_threshold=0)
+        X_train = np.asarray(preprocessor.fit_transform(raw_features.iloc[train_idx]), dtype="float32")
+        X_val = np.asarray(preprocessor.transform(raw_features.iloc[val_idx]), dtype="float32")
+        if X_train.shape[1] < 1 or X_train.shape[1] > 2_048:
+            raise ValueError("Transformed feature width must be between 1 and 2,048.")
+        output_features = [str(value) for value in preprocessor.get_feature_names_out()]
+        preprocessing_summary = {
+            "fit_scope": "training_rows_only", "numeric": numeric_features, "categorical": categorical_features,
+            "output_features": output_features, "output_width": len(output_features),
+            "note": "Checkpoint contains model weights; preprocessing metadata is descriptive and no unsafe pickle is stored.",
+        }
+    else:
+        scaler = StandardScaler().fit(X[train_idx])
+        X_train = scaler.transform(X[train_idx]).astype("float32")
+        X_val = scaler.transform(X[val_idx]).astype("float32")
+        output_features = list(features)
+        preprocessing_summary = {
+            "fit_scope": "training_rows_only", "numeric": list(features), "categorical": [],
+            "output_features": output_features, "output_width": len(output_features),
+        }
     y_train, y_val = y[train_idx].astype("int64"), y[val_idx].astype("int64")
 
     generator = torch.Generator().manual_seed(seed)
@@ -251,7 +314,7 @@ def train_tabular(config: dict[str, Any], checkpoint_path: Path | None = None) -
         num_workers=0,
     )
 
-    model = ConfigurableMLP(X.shape[1], hidden, len(classes), activation, dropout).to(device)
+    model = ConfigurableMLP(X_train.shape[1], hidden, len(classes), activation, dropout).to(device)
     loss_fn = nn.CrossEntropyLoss()
     optimizer = _optimizer(optimizer_name, model.parameters(), learning_rate, weight_decay)
     history = _history_template()
@@ -271,6 +334,10 @@ def train_tabular(config: dict[str, Any], checkpoint_path: Path | None = None) -
     }
     resolved = {
         "dataset": dataset_name,
+        "source": "player_upload" if personal else "bundled",
+        "target": str(config.get("target")) if personal else None,
+        "features": list(features),
+        "preprocessing": preprocessing_summary,
         "hidden": hidden,
         "activation": activation,
         "optimizer": optimizer_name,
@@ -286,7 +353,7 @@ def train_tabular(config: dict[str, Any], checkpoint_path: Path | None = None) -
     checkpoint = _save_checkpoint(
         model,
         checkpoint_path,
-        {"engine": "pytorch", "task": "classification", "classes": classes, "features": features, "config": resolved},
+        {"engine": "pytorch", "task": "classification", "classes": classes, "features": features, "preprocessing": preprocessing_summary, "config": resolved},
     )
     return {
         "engine": "pytorch",
@@ -296,7 +363,9 @@ def train_tabular(config: dict[str, Any], checkpoint_path: Path | None = None) -
         "duration_seconds": round(duration, 4),
         "seed": seed,
         "config": resolved,
-        "features": features,
+        "features": list(features),
+        "transformed_features": output_features,
+        "preprocessing": preprocessing_summary,
         "classes": classes,
         "n_train": len(train_idx),
         "n_validation": len(val_idx),

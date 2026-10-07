@@ -197,7 +197,7 @@ def catalog() -> list[dict[str, Any]]:
     return [tool.public() for tool in TOOLS.values()]
 
 
-def create_configuration(db: DB, player_id: int, data: dict[str, Any]) -> dict[str, Any]:
+def _validate_configuration(data: dict[str, Any]) -> tuple[str, str, str, list[str], list[str], int, float]:
     name = str(data.get("name", "Local Agent")).strip()[:100] or "Local Agent"
     model = str(data.get("model", "")).strip()[:160]
     if not model:
@@ -213,6 +213,11 @@ def create_configuration(db: DB, player_id: int, data: dict[str, Any]) -> dict[s
         raise ValueError("Unknown permission.")
     max_steps = int(max(1, min(12, int(data.get("max_steps", 6)))))
     timeout = float(max(5, min(180, float(data.get("timeout_seconds", 60)))))
+    return name, model, system_prompt, tools, permissions, max_steps, timeout
+
+
+def create_configuration(db: DB, player_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    name, model, system_prompt, tools, permissions, max_steps, timeout = _validate_configuration(data)
     config_id = uuid.uuid4().hex
     now = time.time()
     db.x(
@@ -220,6 +225,23 @@ def create_configuration(db: DB, player_id: int, data: dict[str, Any]) -> dict[s
         (config_id, player_id, name, model, system_prompt, json.dumps(tools), json.dumps(permissions), "[]", max_steps, timeout, now, now),
     )
     return get_configuration(db, player_id, config_id)
+
+
+def update_configuration(db: DB, player_id: int, config_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    get_configuration(db, player_id, config_id)
+    name, model, system_prompt, tools, permissions, max_steps, timeout = _validate_configuration(data)
+    db.x(
+        "UPDATE agent_configurations SET name=?, model=?, system_prompt=?, tools_json=?, permissions_json=?, max_steps=?, timeout_seconds=?, updated_at=? WHERE id=? AND player_id=?",
+        (name, model, system_prompt, json.dumps(tools), json.dumps(permissions), max_steps, timeout, time.time(), config_id, player_id),
+    )
+    return get_configuration(db, player_id, config_id)
+
+
+def delete_configuration(db: DB, player_id: int, config_id: str) -> dict[str, Any]:
+    get_configuration(db, player_id, config_id)
+    db.x("DELETE FROM agent_runs WHERE configuration_id=? AND player_id=?", (config_id, player_id))
+    db.x("DELETE FROM agent_configurations WHERE id=? AND player_id=?", (config_id, player_id))
+    return {"deleted": True, "id": config_id}
 
 
 def _public_config(row: Any) -> dict[str, Any]:

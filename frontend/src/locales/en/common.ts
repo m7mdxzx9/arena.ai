@@ -10,7 +10,7 @@ const en = {
   nav: {
     campus: 'Campus', campusMap: 'Campus Map', knowledgeTree: 'Knowledge Tree', missions: 'Missions', bosses: 'Boss Battles',
     labs: 'Labs', openLab: 'Open Lab', datasets: 'My Datasets', dataLab: 'Data Lab', workbench: 'ML Workbench',
-    experiments: 'Experiments', prediction: 'Prediction Lab', neural: 'NumPy Neural Lab', pytorch: 'PyTorch & CNN',
+    experiments: 'Experiments', prediction: 'Prediction Lab', neural: 'NumPy Neural Lab', pytorch: 'PyTorch & CNN', checkpoints: 'Checkpoints',
     language: 'Language Lab', rag: 'RAG Learning Simulator', personalRag: 'Real RAG Lab', agent: 'Agent Security Simulator',
     dojo: 'Code Dojo', tutor: 'AI Tutor', mistakes: 'My Mistakes', modelHub: 'Model Hub', realAgent: 'Real Agent Lab', career: 'Career',
     promptLab: 'Prompt Lab', evaluationLab: 'Evaluation Lab', research: 'Research Institute', profile: 'Profile & Settings', portfolio: 'Portfolio', backup: 'Backup / Restore',
@@ -51,6 +51,7 @@ const en = {
     mlTitle: 'ML Workbench', mlDesc: 'Train and compare classical scikit-learn baselines and models.',
     torchTitle: 'PyTorch Lab', torchDesc: 'Train a configurable nn.Module with DataLoader, backpropagation and real validation curves.',
     cnnTitle: 'CNN Lab', cnnDesc: 'Train a compact Conv2D network on local 8×8 digits and inspect mistakes.',
+    checkpointsTitle: 'Checkpoint Manager', checkpointsDesc: 'Inspect, rename, download and safely remove model artifacts produced by your runs.',
     ragTitle: 'Real RAG Lab', ragDesc: 'Upload documents, inspect retrieved chunks and use extractive or local-LLM answering.',
     modelTitle: 'Model Hub', modelDesc: 'Inspect Ollama availability and local model metadata without fabricated capabilities.',
     tutorTitle: 'AI Tutor', tutorDesc: 'Use the always-available curated tutor or an explicitly selected local model.',
@@ -71,16 +72,19 @@ const en = {
   },
   torch: {
     kicker: 'Professional Neural Engine', title: 'PyTorch & CNN Lab', numpyPreserved: 'The transparent NumPy lab remains available separately. This page runs genuine PyTorch training.',
-    pytorchTab: 'PyTorch MLP', cnnTab: 'CNN digits', architecture: 'Architecture', hidden: 'Hidden layers', activation: 'Activation', optimizer: 'Optimizer',
+    pytorchTab: 'PyTorch MLP', cnnTab: 'CNN digits', architecture: 'Architecture', dataset: 'Dataset', personalPrefix: 'My dataset', personalSafety: 'Preprocessing is fitted only on training rows. Classification targets must have 2–100 classes; high-cardinality feature expansion is bounded.', hidden: 'Hidden layers', activation: 'Activation', optimizer: 'Optimizer',
     learningRate: 'Learning rate', batchSize: 'Batch size', epochs: 'Epochs', dropout: 'Dropout', preferredDevice: 'Preferred device', autoDevice: 'Auto (CUDA when available)',
     train: 'Train PyTorch model', training: 'Training real network…', unavailable: 'PyTorch is not installed in the backend environment.',
     curves: 'Real learning curves', trainLoss: 'Training loss', validationLoss: 'Validation loss', trainAccuracy: 'Training accuracy', validationAccuracy: 'Validation accuracy',
     cnnTrain: 'Train CNN', confusion: 'Confusion matrix', mistakes: 'Misclassified images', correct: 'Correct predictions', featureMaps: 'First-layer feature maps', checkpoint: 'Local checkpoint', augmentation: 'Training augmentation', none: 'None', shift: 'Pixel shift', noise: 'Gaussian noise', shiftNoise: 'Shift + noise', augmentationPreview: 'Augmentation preview', original: 'Original', transformed: 'Transformed',
   },
+  checkpoints: {
+    kicker: 'Generated model artifacts', title: 'Checkpoint Manager', subtitle: 'Inspect, rename, download and delete checkpoints produced by your own PyTorch and CNN runs.', security: 'Only locally generated state dictionaries are managed here. Uploaded pickle or checkpoint deserialization is intentionally not supported.', empty: 'No checkpoints yet. Train a PyTorch or CNN model to create one.', metadata: 'View metadata', rename: 'Rename', download: 'Download', deleteConfirm: 'Permanently delete this checkpoint and its metadata?',
+  },
   models: {
     kicker: 'Local model infrastructure', title: 'Model Hub', subtitle: 'NEURAL FORGE never requires a paid API. Ollama is optional and core gameplay continues when it is unavailable.',
     refresh: 'Refresh status', ollamaUnavailable: 'Ollama is unavailable. Start it locally to enable local-LLM features.', noModels: 'Ollama is reachable but no local models are installed.',
-    provider: 'Provider', model: 'Model', size: 'Size', family: 'Family', quantization: 'Quantization', capabilities: 'Capabilities', unknown: 'Not reported', defaultModel: 'Default model', selectDefault: 'Use as default',
+    provider: 'Provider', model: 'Model', size: 'Size', family: 'Family', quantization: 'Quantization', capabilities: 'Capabilities', unknown: 'Not reported', defaultModel: 'Default model', selectDefault: 'Use as default', manage: 'Manage local models', manageHelp: 'Pulling downloads a model through your configured local Ollama service and may take several minutes. Deleting removes it from Ollama after confirmation.', pull: 'Pull model', pulling: 'Downloading model…', pullComplete: 'Model downloaded successfully.', pullPlaceholder: 'Example: qwen2.5:3b', deleteConfirm: 'Delete local model {{name}} from Ollama?',
   },
   tutor: {
     kicker: 'Personalized learning support', title: 'AI Tutor', subtitle: 'Offline mode is curated and always available. Local mode only runs when Ollama and the selected model are available.',
@@ -99,22 +103,22 @@ const en = {
     evidence: 'Retrieved evidence', score: 'Score', injection: 'Possible prompt-injection text', untrusted: 'Untrusted document data', citations: 'Citations', latency: 'Latency',
   },
   portfolio: {
-    kicker: 'Evidence-based project stories', title: 'Portfolio Builder', subtitle: 'Turn saved experiments into editable case studies grounded in their real configuration and metrics.', selectRun: 'Source experiment', create: 'Create case study', projects: 'Projects', problem: 'Problem', dataset: 'Dataset', method: 'Method', metrics: 'Metrics', interpretation: 'Interpretation', limitations: 'Limitations', nextSteps: 'Next steps', update: 'Save changes', exportMarkdown: 'Export Markdown', exportHtml: 'Export HTML', exportJson: 'Export JSON', noProjects: 'No portfolio projects yet.', noRuns: 'Save an experiment before creating a portfolio case study.',
+    kicker: 'Evidence-based project stories', title: 'Portfolio Builder', subtitle: 'Turn saved experiments into editable case studies grounded in their real configuration and metrics.', selectRun: 'Source experiment', create: 'Create case study', projects: 'Projects', problem: 'Problem', dataset: 'Dataset', method: 'Method', metrics: 'Metrics', interpretation: 'Interpretation', limitations: 'Limitations', nextSteps: 'Next steps', update: 'Save changes', exportMarkdown: 'Export Markdown', exportHtml: 'Export HTML', exportJson: 'Export JSON', deleteConfirm: 'Delete this portfolio case study?', noProjects: 'No portfolio projects yet.', noRuns: 'Save an experiment before creating a portfolio case study.',
   },
   backup: {
-    kicker: 'Portable progress', title: 'Backup & Restore', subtitle: 'Export a versioned JSON backup of learning progress, settings, experiments and lab artifacts. Restore merges into the current profile without deleting existing progress.', export: 'Download backup', restore: 'Validate & restore', choose: 'Choose backup JSON', mergeNotice: 'Restore is non-destructive merge mode. Uploaded data files, documents and checkpoints are excluded and listed in the backup manifest.', restored: 'Backup restored', security: 'Secret-like fields are redacted. Backup files are untrusted and validated before one atomic restore transaction.',
+    kicker: 'Portable progress', title: 'Backup & Restore', subtitle: 'Export versioned backups and merge them into the current profile without deleting existing progress.', export: 'Download JSON backup', restore: 'Validate & restore JSON', choose: 'Choose backup JSON', mergeNotice: 'The compact JSON backup excludes uploaded files, documents, checkpoints, and execution traces; every exclusion is declared in its manifest.', restored: 'Backup restored', security: 'Secret-like fields are redacted. Backup files are untrusted and validated before profile changes.', fullTitle: 'Full archive backup', fullHelp: 'The .nfbackup archive includes the portable profile plus normalized personal datasets, normalized document text, and generated checkpoint bytes. Agent execution traces remain excluded.', fullSecurity: 'Archive paths, entry counts, expanded sizes, content formats, and SHA-256 digests are validated. Checkpoint bytes are copied without deserialization.', exportFull: 'Download full archive', chooseFull: 'Choose .nfbackup file', restoreFull: 'Restore full archive',
   },
   promptLab: {
     kicker: 'Versioned prompt engineering', title: 'Prompt Lab', subtitle: 'Create, version and execute prompts against an explicitly selected local model. Production output is never mocked.',
-    create: 'Create prompt', name: 'Prompt name', system: 'System section', user: 'User section', variables: 'Variables (JSON)', saveVersion: 'Save new version', changeNote: 'What changed?', versions: 'Versions', execute: 'Execute version', output: 'Model output', noPrompts: 'No saved prompts yet.', compare: 'Version comparison',
+    create: 'Create prompt', edit: 'Edit prompt', newPrompt: 'New prompt', rename: 'Rename prompt', deleteConfirm: 'Delete this prompt and every saved version?', name: 'Prompt name', system: 'System section', user: 'User section', variables: 'Variables (JSON)', saveVersion: 'Save new version', changeNote: 'What changed?', versions: 'Versions', execute: 'Execute version', output: 'Model output', noPrompts: 'No saved prompts yet.', compare: 'Version comparison',
   },
   evaluationLab: {
     kicker: 'Deterministic measurement', title: 'Evaluation Lab', subtitle: 'Evaluate outputs with explicit deterministic rules: exact match, contains, regex, numeric tolerance, JSON schema, labels, citations, tool choice and retrieval.',
-    createDataset: 'Create evaluation dataset', datasetName: 'Dataset name', cases: 'Cases (JSON)', datasets: 'Evaluation datasets', outputs: 'Outputs by case ID (JSON)', run: 'Run deterministic evaluation', passed: 'Passed', failed: 'Failed', score: 'Score', noDatasets: 'No evaluation datasets yet.', deterministic: 'Deterministic',
+    createDataset: 'Create evaluation dataset', datasetName: 'Dataset name', cases: 'Cases (JSON)', datasets: 'Evaluation datasets', loadEdit: 'Load into editor', deleteConfirm: 'Delete this evaluation dataset? Saved evaluation runs remain available.', outputs: 'Outputs by case ID (JSON)', run: 'Run deterministic evaluation', passed: 'Passed', failed: 'Failed', score: 'Score', noDatasets: 'No evaluation datasets yet.', deterministic: 'Deterministic',
   },
   realAgent: {
     kicker: 'Controlled local-model agent', title: 'Real Agent Lab', subtitle: 'Configure a local model, explicit tools and code-enforced permissions. The trace shows actions and observations, never private chain-of-thought.',
-    configs: 'Agent configurations', create: 'Create agent', name: 'Agent name', systemPrompt: 'System prompt', tools: 'Enabled tools', permissions: 'Granted permissions', maxSteps: 'Maximum steps', timeout: 'Timeout',
+    configs: 'Agent configurations', create: 'Create agent', edit: 'Edit configuration', deleteConfirm: 'Delete this agent configuration and its saved run traces?', name: 'Agent name', systemPrompt: 'System prompt', tools: 'Enabled tools', permissions: 'Granted permissions', maxSteps: 'Maximum steps', timeout: 'Timeout',
     noConfigs: 'No agent configurations yet.', request: 'Task for the agent', run: 'Run agent', running: 'Agent is running…', trace: 'Observable trace', memory: 'Visible memory', clearMemory: 'Clear memory',
     permissionAllowed: 'Permission allowed', permissionDenied: 'Permission denied', toolResult: 'Tool result', final: 'Final answer', requiresOllama: 'A reachable Ollama model is required to run this lab. Configuration remains available offline.', arena: 'Agent vs Agent Arena', arenaHelp: 'Run identical tasks. Add optional expected phrases after ||, separated by commas. Scoring is deterministic—never an uncalibrated LLM judge.', firstAgent: 'First agent', secondAgent: 'Second agent', tasks: 'Comparable tasks', runArena: 'Run arena', leaderboard: 'Leaderboard', completion: 'Completion', averageSteps: 'Average steps', averageLatency: 'Average latency',
   },

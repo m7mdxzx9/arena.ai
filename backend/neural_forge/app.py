@@ -5,8 +5,10 @@ import json
 import logging
 import math
 import os
+import tempfile
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +17,13 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from . import (
     agent,
     backup,
     capabilities,
+    checkpoints,
     code_exercises,
     datasets,
     document_rag,
@@ -139,6 +143,11 @@ class ModelChat(BaseModel):
     stream: bool = False
 
 
+class ModelPullRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=160)
+    provider: str = "ollama"
+
+
 class TutorRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4_000)
     mode: str = "simple"
@@ -179,6 +188,10 @@ class AgentRunRequest(BaseModel):
 class AgentArenaRequest(BaseModel):
     configuration_ids: list[str] = Field(min_length=2, max_length=4)
     tasks: list[dict[str, Any]] = Field(min_length=1, max_length=10)
+
+
+class PromptRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
 
 
 class PromptCreate(BaseModel):
@@ -238,6 +251,10 @@ class BackupRestoreRequest(BaseModel):
     backup: dict[str, Any]
 
 
+class CheckpointUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
 BOUNDARY_MODELS = {"logistic_regression", "decision_tree", "random_forest", "knn", "naive_bayes", "gradient_boosting"}
 
 
@@ -294,6 +311,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     app.state.db = db
     dataset_store = DatasetStore(db)
     document_store = document_rag.DocumentStore(db)
+    checkpoint_store = checkpoints.CheckpointStore(db)
+    app.state.dataset_store = dataset_store
+    app.state.document_store = document_store
+    app.state.checkpoint_store = checkpoint_store
 
     @app.middleware("http")
     async def structured_request_log(request: Request, call_next):
@@ -340,6 +361,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
     async def _document_error(_: Request, exc: document_rag.DocumentError):
         return SafeJSON({"error": exc.message, "code": exc.code}, status_code=400)
 
+    @app.exception_handler(checkpoints.CheckpointError)
+    async def _checkpoint_error(_: Request, exc: checkpoints.CheckpointError):
+        status = 404 if exc.code == "checkpoint_missing" else 400
+        return SafeJSON({"error": exc.message, "code": exc.code}, status_code=status)
+
     @app.exception_handler(ProviderError)
     async def _provider_error(_: Request, exc: ProviderError):
         return SafeJSON({"error": exc.message, "code": exc.code}, status_code=exc.status)
@@ -373,6 +399,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/models/{model_name:path}")
     def local_model_info(model_name: str, provider: str = "ollama"):
         return get_provider(provider).model_info(model_name)
+
+    @app.post("/api/models/pull")
+    def local_model_pull(body: ModelPullRequest):
+        return get_provider(body.provider).pull_model(body.model)
+
+    @app.delete("/api/models/{model_name:path}")
+    def local_model_delete(model_name: str, provider: str = "ollama"):
+        return get_provider(provider).delete_model(model_name)
 
     @app.post("/api/models/chat")
     def local_model_chat(body: ModelChat):
@@ -545,34 +579,75 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     # ----------------------------------------------------------- professional PyTorch / CNN labs
 
-    def checkpoint_path(pid: int, kind: str) -> tuple[str, Path]:
-        checkpoint_id = uuid.uuid4().hex
-        root = (Path(db.path).resolve().parent if db.path != ":memory:" else Path(os.environ.get("TMPDIR", "/tmp"))) / "checkpoints" / str(pid)
-        return checkpoint_id, root / f"{checkpoint_id}.pt"
+    def _discard_failed_training(pid: int, checkpoint_id: str, path: Path, run_id: int | None) -> None:
+        try:
+            checkpoint_store.discard(pid, checkpoint_id, path)
+        except Exception:
+            LOGGER.exception("Failed to clean checkpoint after a training error")
+        if run_id is not None:
+            db.x("DELETE FROM runs WHERE id=? AND player_id=?", (run_id, pid))
 
     @app.post("/api/p/{pid}/pytorch/train")
     def pytorch_train(pid: int, body: TorchRun):
         game._player(db, pid)
-        checkpoint_id, path = checkpoint_path(pid, "pytorch")
+        checkpoint_id, path = checkpoint_store.allocate(pid)
+        run_id: int | None = None
+        dataset_id = str(body.config.get("dataset", ""))
+        frame = dataset_store.load(pid, dataset_id.removeprefix("user:")) if dataset_id.startswith("user:") else None
         try:
-            result = torch_engine.train_tabular(body.config, path)
+            result = torch_engine.train_tabular(body.config, path, frame)
+            summary = {"engine": "pytorch", "device": result["device"], "final": result["final"], "duration_seconds": result["duration_seconds"]}
+            run_id = db.save_run(pid, "pytorch", result["config"], result, summary, name=body.name, context="open_lab")
+            checkpoint = checkpoint_store.register(pid, checkpoint_id, path, run_id, "pytorch", body.name, {"device": result["device"], "final": result["final"]})
         except ValueError as exc:
+            _discard_failed_training(pid, checkpoint_id, path, run_id)
             raise game.GameError(str(exc)) from exc
-        summary = {"engine": "pytorch", "device": result["device"], "final": result["final"], "duration_seconds": result["duration_seconds"]}
-        run_id = db.save_run(pid, "pytorch", result["config"], result, summary, name=body.name, context="open_lab")
-        return {"ok": True, "run_id": run_id, "checkpoint_id": checkpoint_id, "result": result, **game._after_run(db, pid)}
+        except Exception:
+            _discard_failed_training(pid, checkpoint_id, path, run_id)
+            raise
+        result["checkpoint"] = checkpoint
+        return {"ok": True, "run_id": run_id, "checkpoint_id": checkpoint_id, "checkpoint": checkpoint, "result": result, **game._after_run(db, pid)}
 
     @app.post("/api/p/{pid}/cnn/train")
     def cnn_train(pid: int, body: TorchRun):
         game._player(db, pid)
-        checkpoint_id, path = checkpoint_path(pid, "cnn")
+        checkpoint_id, path = checkpoint_store.allocate(pid)
+        run_id: int | None = None
         try:
             result = torch_engine.train_cnn(body.config, path)
+            summary = {"engine": "pytorch", "device": result["device"], "final": result["final"], "duration_seconds": result["duration_seconds"]}
+            run_id = db.save_run(pid, "cnn", result["config"], result, summary, name=body.name, context="open_lab")
+            checkpoint = checkpoint_store.register(pid, checkpoint_id, path, run_id, "cnn", body.name, {"device": result["device"], "final": result["final"]})
         except ValueError as exc:
+            _discard_failed_training(pid, checkpoint_id, path, run_id)
             raise game.GameError(str(exc)) from exc
-        summary = {"engine": "pytorch", "device": result["device"], "final": result["final"], "duration_seconds": result["duration_seconds"]}
-        run_id = db.save_run(pid, "cnn", result["config"], result, summary, name=body.name, context="open_lab")
-        return {"ok": True, "run_id": run_id, "checkpoint_id": checkpoint_id, "result": result, **game._after_run(db, pid)}
+        except Exception:
+            _discard_failed_training(pid, checkpoint_id, path, run_id)
+            raise
+        result["checkpoint"] = checkpoint
+        return {"ok": True, "run_id": run_id, "checkpoint_id": checkpoint_id, "checkpoint": checkpoint, "result": result, **game._after_run(db, pid)}
+
+    @app.get("/api/p/{pid}/checkpoints")
+    def checkpoint_list(pid: int):
+        game._player(db, pid)
+        return checkpoint_store.list(pid)
+
+    @app.get("/api/p/{pid}/checkpoints/{checkpoint_id}")
+    def checkpoint_detail(pid: int, checkpoint_id: str):
+        return checkpoint_store.get(pid, checkpoint_id)
+
+    @app.patch("/api/p/{pid}/checkpoints/{checkpoint_id}")
+    def checkpoint_update(pid: int, checkpoint_id: str, body: CheckpointUpdateRequest):
+        return checkpoint_store.rename(pid, checkpoint_id, body.name)
+
+    @app.get("/api/p/{pid}/checkpoints/{checkpoint_id}/download")
+    def checkpoint_download(pid: int, checkpoint_id: str):
+        path = checkpoint_store.download_path(pid, checkpoint_id)
+        return FileResponse(path, media_type="application/octet-stream", filename=f"neural-forge-{checkpoint_id}.pt")
+
+    @app.delete("/api/p/{pid}/checkpoints/{checkpoint_id}")
+    def checkpoint_delete(pid: int, checkpoint_id: str):
+        return checkpoint_store.delete(pid, checkpoint_id)
 
     # ----------------------------------------------------------- tutor & mistake journal
 
@@ -661,6 +736,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise game.GameError(str(exc)) from exc
 
+    @app.patch("/api/p/{pid}/agent-configurations/{configuration_id}")
+    def update_agent_configuration(pid: int, configuration_id: str, body: AgentConfigurationRequest):
+        try:
+            return real_agent.update_configuration(db, pid, configuration_id, body.model_dump())
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.delete("/api/p/{pid}/agent-configurations/{configuration_id}")
+    def delete_agent_configuration(pid: int, configuration_id: str):
+        return real_agent.delete_configuration(db, pid, configuration_id)
+
     @app.post("/api/p/{pid}/agent-configurations/{configuration_id}/clear-memory")
     def clear_agent_memory(pid: int, configuration_id: str):
         try:
@@ -709,6 +795,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def prompt_detail(pid: int, prompt_id: str):
         return prompts.get(db, pid, prompt_id)
 
+    @app.patch("/api/p/{pid}/prompts/{prompt_id}")
+    def prompt_rename(pid: int, prompt_id: str, body: PromptRenameRequest):
+        try:
+            return prompts.rename(db, pid, prompt_id, body.name)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.delete("/api/p/{pid}/prompts/{prompt_id}")
+    def prompt_delete(pid: int, prompt_id: str):
+        return prompts.delete(db, pid, prompt_id)
+
     @app.post("/api/p/{pid}/prompts/{prompt_id}/versions")
     def prompt_add_version(pid: int, prompt_id: str, body: PromptVersionCreate):
         try:
@@ -739,6 +836,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/p/{pid}/evaluation-datasets/{dataset_id}")
     def evaluation_dataset_detail(pid: int, dataset_id: str):
         return evaluation.get_dataset(db, pid, dataset_id)
+
+    @app.put("/api/p/{pid}/evaluation-datasets/{dataset_id}")
+    def evaluation_dataset_update(pid: int, dataset_id: str, body: EvaluationDatasetCreate):
+        try:
+            return evaluation.update_dataset(db, pid, dataset_id, body.name, body.cases)
+        except ValueError as exc:
+            raise game.GameError(str(exc)) from exc
+
+    @app.delete("/api/p/{pid}/evaluation-datasets/{dataset_id}")
+    def evaluation_dataset_delete(pid: int, dataset_id: str):
+        return evaluation.delete_dataset(db, pid, dataset_id)
 
     @app.post("/api/p/{pid}/evaluation-datasets/{dataset_id}/run")
     def evaluation_run(pid: int, dataset_id: str, body: EvaluationRunRequest):
@@ -771,6 +879,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except ValueError as exc:
             raise game.GameError(str(exc)) from exc
 
+    @app.delete("/api/p/{pid}/portfolio/{project_id}")
+    def portfolio_delete(pid: int, project_id: str):
+        return portfolio.delete_project(db, pid, project_id)
+
     @app.get("/api/p/{pid}/portfolio/{project_id}/export")
     def portfolio_export(pid: int, project_id: str, format: str = "markdown"):
         try:
@@ -794,6 +906,49 @@ def create_app(db_path: str | None = None) -> FastAPI:
             return backup.restore_player(db, pid, body.backup)
         except ValueError as exc:
             raise game.GameError(str(exc)) from exc
+
+    @app.get("/api/p/{pid}/backup/full")
+    def full_backup_export(pid: int):
+        game._player(db, pid)
+        temporary = tempfile.NamedTemporaryFile(prefix=f"neural-forge-{pid}-", suffix=".nfbackup", delete=False)
+        path = Path(temporary.name)
+        temporary.close()
+        try:
+            backup.write_full_archive(db, pid, path, dataset_store, document_store, checkpoint_store)
+        except ValueError as exc:
+            path.unlink(missing_ok=True)
+            raise game.GameError(str(exc), 413) from exc
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=f"neural-forge-player-{pid}.nfbackup",
+            background=BackgroundTask(path.unlink, missing_ok=True),
+        )
+
+    @app.post("/api/p/{pid}/restore/full")
+    async def full_backup_restore(pid: int, file: UploadFile = File(...)):
+        game._player(db, pid)
+        temporary = tempfile.NamedTemporaryFile(prefix="neural-forge-restore-", suffix=".nfbackup", delete=False)
+        path = Path(temporary.name)
+        size = 0
+        try:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > backup.MAX_ARCHIVE_BYTES:
+                    raise game.GameError("Full backup archive exceeds the 2 GiB upload limit.", 413)
+                temporary.write(chunk)
+            temporary.close()
+            if not size:
+                raise game.GameError("Full backup archive is empty.")
+            return backup.restore_full_archive(db, pid, path, dataset_store, document_store, checkpoint_store)
+        except game.GameError:
+            raise
+        except (ValueError, zipfile.BadZipFile, OSError) as exc:
+            raise game.GameError(str(exc) or "Full backup archive could not be restored.") from exc
+        finally:
+            if not temporary.closed:
+                temporary.close()
+            path.unlink(missing_ok=True)
 
     # ----------------------------------------------------------- missions, challenges, bosses
 

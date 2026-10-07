@@ -66,6 +66,9 @@
 .document-row { display: flex; justify-content: space-between; gap: .6rem; align-items: center; padding: .5rem 0; border-bottom: 1px solid var(--line); }
 .retrieved-chunk { border: 1px solid var(--line); border-radius: 11px; padding: .75rem; background: var(--bg2); }
 .untrusted-label { color: var(--amber); }
+.checkpoint-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 1rem; }
+.hash-short { font-size: .9rem; word-break: normal; }
+a.btn.disabled { pointer-events: none; opacity: .45; }
 @media (max-width: 600px) {
   .mistake-detail { grid-template-columns: 1fr; }
   .mistake-detail dd { margin-bottom: .45rem; }

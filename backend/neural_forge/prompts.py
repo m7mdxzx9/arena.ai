@@ -49,6 +49,24 @@ def add_version(db: DB, player_id: int, prompt_id: str, system: str, user: str, 
     return get(db, player_id, prompt_id)
 
 
+def rename(db: DB, player_id: int, prompt_id: str, name: str) -> dict[str, Any]:
+    clean = name.strip()[:100]
+    if not clean:
+        raise ValueError("Prompt name is required.")
+    if not db.one("SELECT 1 FROM prompts WHERE id=? AND player_id=?", (prompt_id, player_id)):
+        raise KeyError(prompt_id)
+    db.x("UPDATE prompts SET name=?, updated_at=? WHERE id=? AND player_id=?", (clean, time.time(), prompt_id, player_id))
+    return get(db, player_id, prompt_id)
+
+
+def delete(db: DB, player_id: int, prompt_id: str) -> dict[str, Any]:
+    if not db.one("SELECT 1 FROM prompts WHERE id=? AND player_id=?", (prompt_id, player_id)):
+        raise KeyError(prompt_id)
+    db.x("DELETE FROM prompt_versions WHERE prompt_id=? AND player_id=?", (prompt_id, player_id))
+    db.x("DELETE FROM prompts WHERE id=? AND player_id=?", (prompt_id, player_id))
+    return {"deleted": True, "id": prompt_id}
+
+
 def list_prompts(db: DB, player_id: int) -> list[dict[str, Any]]:
     rows = db.q(
         "SELECT p.*, MAX(v.version) latest_version, COUNT(v.id) versions FROM prompts p JOIN prompt_versions v ON v.prompt_id=p.id "

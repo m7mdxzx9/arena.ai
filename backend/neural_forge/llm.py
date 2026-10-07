@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Iterator
 from typing import Any, Protocol, runtime_checkable
@@ -31,6 +32,8 @@ class LLMProvider(Protocol):
     def health_check(self) -> dict[str, Any]: ...
     def list_models(self) -> list[dict[str, Any]]: ...
     def model_info(self, model: str) -> dict[str, Any]: ...
+    def pull_model(self, model: str) -> dict[str, Any]: ...
+    def delete_model(self, model: str) -> dict[str, Any]: ...
     def chat(self, model: str, messages: list[dict[str, str]], *, timeout: float | None = None) -> dict[str, Any]: ...
     def stream_chat(self, model: str, messages: list[dict[str, str]]) -> Iterator[dict[str, Any]]: ...
     def structured_generate(self, model: str, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]: ...
@@ -42,6 +45,13 @@ def _safe_base_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("OLLAMA_BASE_URL must be an http(s) URL without embedded credentials.")
     return value.rstrip("/")
+
+
+def _validate_model_name(value: str) -> str:
+    model = str(value).strip()
+    if not model or len(model) > 160 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]*", model):
+        raise ProviderError("Model name contains unsupported characters.", "invalid_model_name", 400)
+    return model
 
 
 def _validate_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -78,7 +88,7 @@ class OllamaProvider:
                 follow_redirects=False,
             )
             response.raise_for_status()
-            return response.json()
+            return response.json() if response.content else {}
         except httpx.TimeoutException as exc:
             raise ProviderError("Ollama did not respond before the timeout.", "ollama_timeout") from exc
         except httpx.ConnectError as exc:
@@ -150,9 +160,7 @@ class OllamaProvider:
         return output
 
     def model_info(self, model: str) -> dict[str, Any]:
-        model = model.strip()[:160]
-        if not model:
-            raise ProviderError("A model name is required.", "model_required", 400)
+        model = _validate_model_name(model)
         data = self._request("POST", "/api/show", payload={"model": model, "verbose": False})
         details = data.get("details", {}) if isinstance(data, dict) else {}
         model_info = data.get("model_info", {}) if isinstance(data, dict) else {}
@@ -171,7 +179,22 @@ class OllamaProvider:
             "context_length": context,
         }
 
+    def pull_model(self, model: str) -> dict[str, Any]:
+        model = _validate_model_name(model)
+        started = time.perf_counter()
+        data = self._request("POST", "/api/pull", payload={"model": model, "stream": False}, timeout=900.0)
+        status = data.get("status") if isinstance(data, dict) else None
+        if status not in {"success", "pulling manifest", None}:
+            raise ProviderError(f"Ollama could not pull model: {str(status)[:200]}", "ollama_pull_failed", 502)
+        return {"provider": self.name, "model": model, "status": status or "success", "duration_ms": round((time.perf_counter() - started) * 1000, 1)}
+
+    def delete_model(self, model: str) -> dict[str, Any]:
+        model = _validate_model_name(model)
+        self._request("DELETE", "/api/delete", payload={"model": model})
+        return {"provider": self.name, "model": model, "deleted": True}
+
     def chat(self, model: str, messages: list[dict[str, str]], *, timeout: float | None = None) -> dict[str, Any]:
+        model = _validate_model_name(model)
         cleaned = _validate_messages(messages)
         started = time.perf_counter()
         data = self._request(
@@ -195,6 +218,7 @@ class OllamaProvider:
         }
 
     def stream_chat(self, model: str, messages: list[dict[str, str]]) -> Iterator[dict[str, Any]]:
+        model = _validate_model_name(model)
         cleaned = _validate_messages(messages)
         try:
             with httpx.stream(
@@ -225,6 +249,7 @@ class OllamaProvider:
             raise ProviderError(f"Ollama stream failed with HTTP {exc.response.status_code}.", "ollama_http_error", 502) from exc
 
     def structured_generate(self, model: str, messages: list[dict[str, str]], schema: dict[str, Any]) -> dict[str, Any]:
+        model = _validate_model_name(model)
         cleaned = _validate_messages(messages)
         data = self._request(
             "POST",
@@ -239,6 +264,7 @@ class OllamaProvider:
         return {"provider": self.name, "model": data.get("model", model), "value": value}
 
     def embeddings(self, model: str, inputs: list[str]) -> list[list[float]]:
+        model = _validate_model_name(model)
         if not inputs or len(inputs) > 128 or any(not isinstance(text, str) or len(text) > 20_000 for text in inputs):
             raise ProviderError("Embedding input must contain 1–128 bounded strings.", "invalid_embedding_input", 400)
         data = self._request("POST", "/api/embed", payload={"model": model, "input": inputs})

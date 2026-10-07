@@ -64,6 +64,12 @@ def update_project(db: DB, player_id: int, project_id: str, content: dict[str, A
     return get_project(db, player_id, project_id)
 
 
+def delete_project(db: DB, player_id: int, project_id: str) -> dict[str, Any]:
+    get_project(db, player_id, project_id)
+    db.x("DELETE FROM portfolio_projects WHERE id=? AND player_id=?", (project_id, player_id))
+    return {"deleted": True, "id": project_id}
+
+
 def to_markdown(project: dict[str, Any]) -> str:
     metrics = project.get("metrics", "")
     metrics_text = "```json\n" + json.dumps(metrics, ensure_ascii=False, indent=2) + "\n```" if not isinstance(metrics, str) else metrics

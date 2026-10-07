@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { post, type Any } from '../api'
+import { del, post, put, type Any } from '../api'
 import { useI18n, Ltr } from '../i18n'
 import { Btn, Card, ErrorBox, Loading, Pill, Select, useApi, useGame } from '../ui'
 
@@ -21,6 +21,7 @@ export default function EvaluationLabPage() {
   const [casesText, setCasesText] = useState(EXAMPLE_CASES)
   const [outputsText, setOutputsText] = useState('{\n  "definition": "Overfitting memorizes training data and fails to generalize to unseen examples.",\n  "numeric": 0.30000000000000004\n}')
   const [result, setResult] = useState<Any>(null)
+  const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const parse = (text: string, expected: 'array' | 'object') => {
@@ -31,6 +32,20 @@ export default function EvaluationLabPage() {
   const create = async () => {
     setBusy(true); setError(null)
     try { const created = await post(`/api/p/${pid}/evaluation-datasets`, { name, cases: parse(casesText, 'array') }); datasets.reload(); setDatasetId(created.id) } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
+  }
+  const loadForEdit = () => {
+    if (!detail.data) return
+    setName(detail.data.name); setCasesText(JSON.stringify(detail.data.cases, null, 2)); setEditing(true)
+  }
+  const update = async () => {
+    if (!activeDatasetId) return
+    setBusy(true); setError(null)
+    try { await put(`/api/p/${pid}/evaluation-datasets/${activeDatasetId}`, { name, cases: parse(casesText, 'array') }); detail.reload(); datasets.reload(); setEditing(false) } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
+  }
+  const remove = async () => {
+    if (!activeDatasetId || !window.confirm(t('evaluationLab.deleteConfirm'))) return
+    setBusy(true); setError(null)
+    try { await del(`/api/p/${pid}/evaluation-datasets/${activeDatasetId}`); setDatasetId(''); setResult(null); setEditing(false); datasets.reload() } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
   }
   const run = async () => {
     setBusy(true); setError(null); setResult(null)
@@ -47,7 +62,8 @@ export default function EvaluationLabPage() {
       </Card></div>
       <div className="col"><Card title={t('evaluationLab.datasets')} icon="📏">
         {!datasets.data?.length && <p className="muted">{t('evaluationLab.noDatasets')}</p>}
-        {datasets.data?.length ? <Select value={activeDatasetId} onChange={setDatasetId} options={datasets.data.map((dataset) => ({ value: dataset.id, label: `${dataset.name} · ${dataset.cases}` }))} /> : null}
+        {datasets.data?.length ? <Select value={activeDatasetId} onChange={(value) => { setEditing(false); setDatasetId(value) }} options={datasets.data.map((dataset) => ({ value: dataset.id, label: `${dataset.name} · ${dataset.cases}` }))} /> : null}
+        {detail.data && <div className="row"><Btn small kind="ghost" onClick={loadForEdit}>{t('evaluationLab.loadEdit')}</Btn>{editing && <><Btn small onClick={update} disabled={busy}>{t('common.save')}</Btn><Btn small kind="ghost" onClick={() => setEditing(false)}>{t('common.cancel')}</Btn></>}<Btn small kind="danger" onClick={remove} disabled={busy}>{t('common.delete')}</Btn></div>}
         {detail.data && <div className="table-wrap"><table><thead><tr><th>ID</th><th>{t('common.type')}</th><th>{t('common.status')}</th></tr></thead><tbody>{detail.data.cases.map((item: Any) => <tr key={item.id}><td><Ltr>{item.id}</Ltr></td><td><Pill kind="cyan"><Ltr>{item.evaluator.type}</Ltr></Pill></td><td>{item.category} · {item.difficulty}</td></tr>)}</tbody></table></div>}
         {detail.data && <><label className="field"><span className="field-l">{t('evaluationLab.outputs')}</span><textarea className="technical-ltr" dir="ltr" rows={12} value={outputsText} onChange={(event) => setOutputsText(event.target.value)} /></label><Btn onClick={run} disabled={busy}>{busy ? t('common.loading') : t('evaluationLab.run')}</Btn></>}
       </Card>

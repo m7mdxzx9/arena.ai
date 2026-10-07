@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { patch, post, type Any } from '../api'
+import { del, patch, post, type Any } from '../api'
 import { useI18n, Ltr } from '../i18n'
 import { Btn, Card, ErrorBox, Loading, Pill, Select, useApi, useGame } from '../ui'
 
@@ -41,6 +41,11 @@ export default function PortfolioPage() {
     setBusy(true); setError(null)
     try { await patch(`/api/p/${pid}/portfolio/${selected.id}`, payload); projects.reload() } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
   }
+  const remove = async () => {
+    if (!selected || !window.confirm(t('portfolio.deleteConfirm'))) return
+    setBusy(true); setError(null)
+    try { await del(`/api/p/${pid}/portfolio/${selected.id}`); setProjectId(''); projects.reload() } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
+  }
   const download = (format: string) => selected && window.open(`/api/p/${pid}/portfolio/${selected.id}/export?format=${format}`, '_blank', 'noopener')
   return <div className="stack">
     <div className="topbar"><div><div className="kicker">{t('portfolio.kicker')}</div><h1>{t('portfolio.title')}</h1></div></div>
@@ -53,7 +58,7 @@ export default function PortfolioPage() {
         {!projects.data ? <Loading /> : !projects.data.length ? <p className="muted">{t('portfolio.noProjects')}</p> : <><Select value={selected?.id || ''} onChange={setProjectId} options={projects.data.map((project) => ({ value: project.id, label: project.title }))} />{selected && <div key={selected.id}>
           <div className="row"><Pill><Ltr>run #{selected.source_run_id}</Ltr></Pill><Pill kind="cyan"><Ltr>{selected.source_run_kind}</Ltr></Pill></div>
           <PortfolioForm initial={selected} busy={busy} submitLabel={t('portfolio.update')} onSubmit={update} />
-          <div className="row"><Btn kind="ghost" onClick={() => download('markdown')}>{t('portfolio.exportMarkdown')}</Btn><Btn kind="ghost" onClick={() => download('html')}>{t('portfolio.exportHtml')}</Btn><Btn kind="ghost" onClick={() => download('json')}>{t('portfolio.exportJson')}</Btn></div>
+          <div className="row"><Btn kind="ghost" onClick={() => download('markdown')}>{t('portfolio.exportMarkdown')}</Btn><Btn kind="ghost" onClick={() => download('html')}>{t('portfolio.exportHtml')}</Btn><Btn kind="ghost" onClick={() => download('json')}>{t('portfolio.exportJson')}</Btn><Btn kind="danger" onClick={remove} disabled={busy}>{t('common.delete')}</Btn></div>
         </div>}</>}
       </Card><ErrorBox error={error || projects.error || runs.error} /></div>
     </div>

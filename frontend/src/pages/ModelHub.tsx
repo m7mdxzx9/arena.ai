@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { post, type Any } from '../api'
+import { del, post, type Any } from '../api'
 import { useI18n, Ltr } from '../i18n'
 import { Btn, Card, ErrorBox, Loading, Pill, useApi, useGame } from '../ui'
 
@@ -9,6 +9,8 @@ export default function ModelHub() {
   const models = useApi<Any>('/api/models')
   const capabilities = useApi<Any>('/api/system/capabilities')
   const [detail, setDetail] = useState<Any>(null)
+  const [pullName, setPullName] = useState('')
+  const [operationError, setOperationError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const inspect = async (name: string) => {
     setBusy(name)
@@ -24,11 +26,25 @@ export default function ModelHub() {
     await refresh()
     toast({ kind: 'info', text: t('common.settingsSaved') })
   }
+  const pull = async () => {
+    setBusy('pull'); setOperationError(null)
+    try { await post('/api/models/pull', { model: pullName, provider: 'ollama' }); setPullName(''); models.reload(); toast({ kind: 'info', text: t('models.pullComplete') }) } catch (error: Any) { setOperationError(error.message) } finally { setBusy(null) }
+  }
+  const remove = async (name: string) => {
+    if (!window.confirm(t('models.deleteConfirm', { name }))) return
+    setBusy(`delete:${name}`); setOperationError(null)
+    try { await del(`/api/models/${encodeURIComponent(name)}`); if (detail?.name === name) setDetail(null); models.reload() } catch (error: Any) { setOperationError(error.message) } finally { setBusy(null) }
+  }
   const list = models.data?.models || []
   return (
     <div className="stack">
       <div className="topbar"><div><div className="kicker">{t('models.kicker')}</div><h1>{t('models.title')}</h1></div><div className="spacer" /><Btn kind="ghost" onClick={() => { models.reload(); capabilities.reload() }}>{t('models.refresh')}</Btn></div>
       <p className="muted">{t('models.subtitle')}</p>
+      <Card title={t('models.manage')} icon="📦">
+        <p className="muted">{t('models.manageHelp')}</p>
+        <div className="row"><input className="technical-ltr" dir="ltr" value={pullName} onChange={(event) => setPullName(event.target.value)} placeholder={t('models.pullPlaceholder')} /><Btn onClick={pull} disabled={busy !== null || !pullName.trim() || !models.data?.reachable}>{busy === 'pull' ? t('models.pulling') : t('models.pull')}</Btn></div>
+        <ErrorBox error={operationError} />
+      </Card>
       <ErrorBox error={models.error || capabilities.error} />
       {models.loading && <Loading />}
       {models.data && !models.data.reachable && <div className="warn-box">🦙 {t('models.ollamaUnavailable')}<br /><small>{models.data.error}</small></div>}
@@ -42,7 +58,7 @@ export default function ModelHub() {
             <dt>{t('models.quantization')}</dt><dd><Ltr>{model.quantization || t('models.unknown')}</Ltr></dd>
             <dt>{t('models.capabilities')}</dt><dd>{model.capabilities ? model.capabilities.join(', ') : t('models.unknown')}</dd>
           </div>
-          <div className="row" style={{ marginTop: 10 }}><Btn small kind="ghost" onClick={() => inspect(model.name)} disabled={busy === model.name}>{busy === model.name ? t('common.loading') : t('datasets.inspect')}</Btn><Btn small onClick={() => setDefault(model.name)}>{t('models.selectDefault')}</Btn></div>
+          <div className="row" style={{ marginTop: 10 }}><Btn small kind="ghost" onClick={() => inspect(model.name)} disabled={busy === model.name}>{busy === model.name ? t('common.loading') : t('datasets.inspect')}</Btn><Btn small onClick={() => setDefault(model.name)}>{t('models.selectDefault')}</Btn><Btn small kind="danger" onClick={() => remove(model.name)} disabled={busy === `delete:${model.name}`}>{t('common.delete')}</Btn></div>
         </Card>
       ))}</div>}
       {detail && <Card title={<><Ltr>{detail.name}</Ltr> · {t('datasets.inspect')}</>} icon="🔬">

@@ -1,16 +1,32 @@
 import io
 import json
 import math
+import sqlite3
+import zipfile
 
 import pytest
 
 from neural_forge import backup, document_rag, evaluation, portfolio, prompts, ranking, real_agent, torch_engine
+from neural_forge.db import DB
 from neural_forge.llm import OllamaProvider, ProviderError
 from neural_forge.user_datasets import DatasetUploadError, parse_upload
 
 
 def new_player(client, name="Workspace"):
     return client.post("/api/players", json={"name": name, "mode": 2}).json()["player"]["id"]
+
+
+def test_additive_schema_migration_preserves_legacy_profile(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE players (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, mode INTEGER NOT NULL DEFAULT 1, xp INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL)")
+    connection.execute("INSERT INTO players(name,mode,xp,settings,created_at) VALUES ('Legacy',2,345,'{}',1)")
+    connection.commit(); connection.close()
+    db = DB(path)
+    assert db.player(1)["name"] == "Legacy" and db.player(1)["xp"] == 345
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert [row["version"] for row in db.q("SELECT version FROM schema_migrations ORDER BY version")] == [1, 2]
+    assert db.one("SELECT name FROM sqlite_master WHERE type='table' AND name='model_checkpoints'") is not None
 
 
 def test_top_five_scores_filters_groups_and_sorts():
@@ -153,6 +169,8 @@ def test_portfolio_is_grounded_in_saved_run_and_exports_safely(client):
     changed = portfolio.update_project(db, pid, project["id"], {"title": "<script>alert(1)</script>"})
     html, _ = portfolio.export_project(changed, "html")
     assert "<script>alert" not in html and "&lt;script&gt;" in html
+    assert portfolio.delete_project(db, pid, project["id"])["deleted"] is True
+    assert portfolio.list_projects(db, pid) == []
 
 
 def test_versioned_backup_redacts_secrets_and_restores_by_merge(client):
@@ -167,6 +185,45 @@ def test_versioned_backup_redacts_secrets_and_restores_by_merge(client):
     assert restored["restored"] and restored["mode"] == "merge"
     assert db.mastery(target)["ml_overfitting"]["p"] == 0.82
     assert db.runs(target)[0]["config"] == {"dataset": "iris"}
+
+
+def test_full_backup_round_trip_includes_guarded_assets_without_loading_checkpoint(client, tmp_path):
+    source = new_player(client, "Archive source")
+    target = new_player(client, "Archive target")
+    db = client.app.state.db
+    datasets = client.app.state.dataset_store
+    documents = client.app.state.document_store
+    checkpoints = client.app.state.checkpoint_store
+    datasets.create_from_upload(source, b"value,label\n1,a\n2,b\n3,a\n", "sample.csv", "My sample")
+    documents.add(source, b"Trusted notes about validation and generalization.", "notes.txt", "My notes")
+    run_id = db.save_run(source, "pytorch", {"dataset": "sample"}, {"ok": True}, {"accuracy": 0.5})
+    checkpoint_id, checkpoint_path = checkpoints.allocate(source)
+    opaque_bytes = b"opaque-generated-checkpoint-bytes"
+    checkpoint_path.write_bytes(opaque_bytes)
+    checkpoints.register(source, checkpoint_id, checkpoint_path, run_id, "pytorch", "Tiny checkpoint", {"architecture": [2, 2]})
+
+    archive_path = tmp_path / "profile.nfbackup"
+    summary = backup.write_full_archive(db, source, archive_path, datasets, documents, checkpoints)
+    assert summary["assets"] == 3 and archive_path.is_file()
+    restored = backup.restore_full_archive(db, target, archive_path, datasets, documents, checkpoints)
+    assert restored["assets"] == {"datasets": 1, "documents": 1, "checkpoints": 1}
+    assert datasets.load(target, datasets.list(target)[0]["id"]).shape == (3, 2)
+    assert documents.list(target)[0]["name"] == "My notes"
+    restored_checkpoint = checkpoints.list(target)[0]
+    assert checkpoints.download_path(target, restored_checkpoint["id"]).read_bytes() == opaque_bytes
+    assert restored_checkpoint["metadata"] == {"architecture": [2, 2]}
+
+
+def test_full_backup_rejects_archive_traversal_before_restore(client, tmp_path):
+    pid = new_player(client, "Unsafe archive")
+    archive_path = tmp_path / "unsafe.nfbackup"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../outside", b"not allowed")
+    with pytest.raises(ValueError, match="unsafe path"):
+        backup.restore_full_archive(
+            client.app.state.db, pid, archive_path,
+            client.app.state.dataset_store, client.app.state.document_store, client.app.state.checkpoint_store,
+        )
 
 
 def test_invalid_backup_restore_is_atomic(client):
@@ -191,8 +248,11 @@ def test_prompt_versioning_render_and_missing_variable(client):
     detail = prompts.get(db, pid, prompt["id"])
     assert [item["version"] for item in detail["versions"]] == [1, 2]
     assert prompts.render("Hello {{name}}", {"name": "Ada"}) == "Hello Ada"
+    assert prompts.rename(db, pid, prompt["id"], "Renamed")["name"] == "Renamed"
     with pytest.raises(ValueError, match="Missing prompt variables"):
         prompts.render("Hello {{name}}", {})
+    assert prompts.delete(db, pid, prompt["id"])["deleted"] is True
+    assert prompts.list_prompts(db, pid) == []
 
 
 def test_evaluation_dataset_run_is_deterministic_and_persisted(client):
@@ -208,6 +268,10 @@ def test_evaluation_dataset_run_is_deterministic_and_persisted(client):
     })
     assert result["summary"] == {"passed": 3, "failed": 0, "total": 3, "score": 1.0, "by_category": {"concept": 1.0, "math": 1.0, "format": 1.0}, "evaluator_kind": "deterministic"}
     assert db.run(pid, result["run_id"])["kind"] == "evaluation"
+    changed = evaluation.update_dataset(db, pid, dataset["id"], "One case", [{"id": "one", "reference_answer": ["yes"], "evaluator": {"type": "contains"}}])
+    assert changed["name"] == "One case" and len(changed["cases"]) == 1
+    assert evaluation.delete_dataset(db, pid, dataset["id"])["deleted"] is True
+    assert evaluation.list_datasets(db, pid) == []
 
 
 def test_evaluation_rejects_potentially_catastrophic_regex(client):
@@ -233,6 +297,11 @@ def test_real_agent_validates_permission_executes_tool_and_traces(client):
         "name": "Calculator", "model": "local-test", "tools": ["calculator"],
         "permissions": ["calculate"], "max_steps": 3,
     })
+    config = real_agent.update_configuration(db, pid, config["id"], {
+        "name": "Updated calculator", "model": "local-test", "tools": ["calculator"],
+        "permissions": ["calculate"], "max_steps": 3,
+    })
+    assert config["name"] == "Updated calculator"
     provider = FakeAgentProvider([
         {"type": "tool", "tool": "calculator", "arguments": {"expression": "(12 + 3) * 2"}},
         {"type": "final", "answer": "The result is 30."},
@@ -244,6 +313,8 @@ def test_real_agent_validates_permission_executes_tool_and_traces(client):
     assert permission["allowed"] is True
     assert observation["result"]["value"]["value"] == 30
     assert not any("chain" in str(event).lower() for event in run["trace"])
+    assert real_agent.delete_configuration(db, pid, config["id"])["deleted"] is True
+    assert real_agent.list_configurations(db, pid) == []
 
 
 def test_agent_arena_compares_same_tasks_with_deterministic_rules(client):
@@ -284,6 +355,24 @@ def test_agent_calculator_rejects_code_execution():
         real_agent._calculator(None, 0, "", args)
 
 
+def test_ollama_model_management_validates_names_and_uses_bounded_api(monkeypatch):
+    provider = OllamaProvider()
+    calls = []
+    def request(method, path, *, payload=None, timeout=None):
+        calls.append((method, path, payload, timeout))
+        return {"status": "success"}
+    monkeypatch.setattr(provider, "_request", request)
+    pulled = provider.pull_model("qwen2.5:3b")
+    deleted = provider.delete_model("qwen2.5:3b")
+    assert pulled["status"] == "success" and deleted["deleted"] is True
+    assert calls == [
+        ("POST", "/api/pull", {"model": "qwen2.5:3b", "stream": False}, 900.0),
+        ("DELETE", "/api/delete", {"model": "qwen2.5:3b"}, None),
+    ]
+    with pytest.raises(ProviderError, match="unsupported characters"):
+        provider.pull_model("http://evil.invalid/model?x=1")
+
+
 def test_ollama_failure_is_explicit(monkeypatch):
     provider = OllamaProvider(connect_timeout=0.01, read_timeout=0.01)
     def fail(*_args, **_kwargs):
@@ -306,6 +395,60 @@ def test_pytorch_cpu_training_uses_real_curves(tmp_path):
     assert result["history"]["epoch"] == [1, 2]
     assert all(math.isfinite(value) for value in result["history"]["train_loss"])
     assert (tmp_path / "model.pt").is_file() and (tmp_path / "model.json").is_file()
+
+
+def test_failed_checkpoint_registration_compensates_saved_run_and_file(client, monkeypatch):
+    pid = new_player(client, "Atomic checkpoint")
+    store = client.app.state.checkpoint_store
+    def train(_config, path, _frame=None):
+        path.write_bytes(b"generated")
+        return {"config": {"dataset": "moons"}, "device": {"resolved": "cpu"}, "final": {"accuracy": 0.5}, "duration_seconds": 0.01}
+    monkeypatch.setattr(torch_engine, "train_tabular", train)
+    monkeypatch.setattr(store, "register", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("registry failed")))
+    response = client.post(f"/api/p/{pid}/pytorch/train", json={"config": {"dataset": "moons"}})
+    assert response.status_code == 400
+    assert client.app.state.db.runs(pid) == []
+    assert store.list(pid) == []
+    assert list(store._player_root(pid).glob("*")) == []
+
+
+@pytest.mark.skipif(not torch_engine.availability()["installed"], reason="optional PyTorch dependency is not installed")
+def test_pytorch_trains_player_uploaded_mixed_dataset_without_preprocessing_leakage(client):
+    pid = new_player(client, "Custom torch")
+    rows = ["number,color,label"] + [f"{index},{'red' if index % 2 else 'blue'},{'yes' if index % 2 else 'no'}" for index in range(40)]
+    uploaded = client.post(f"/api/p/{pid}/datasets", files={"file": ("mixed.csv", "\n".join(rows).encode(), "text/csv")})
+    assert uploaded.status_code == 200, uploaded.text
+    dataset_id = uploaded.json()["id"]
+    other = new_player(client, "Other dataset owner")
+    forbidden = client.post(f"/api/p/{other}/pytorch/train", json={"config": {"dataset": f"user:{dataset_id}", "target": "label", "features": ["number", "color"], "epochs": 1, "device": "cpu"}})
+    assert forbidden.status_code == 404
+    trained = client.post(f"/api/p/{pid}/pytorch/train", json={"config": {"dataset": f"user:{dataset_id}", "target": "label", "features": ["number", "color"], "hidden": [4], "epochs": 1, "batch_size": 16, "device": "cpu", "seed": 9}})
+    assert trained.status_code == 200, trained.text
+    result = trained.json()["result"]
+    assert result["config"]["source"] == "player_upload"
+    assert result["preprocessing"]["fit_scope"] == "training_rows_only"
+    assert result["preprocessing"]["categorical"] == ["color"]
+    assert result["preprocessing"]["output_width"] >= 3
+
+
+@pytest.mark.skipif(not torch_engine.availability()["installed"], reason="optional PyTorch dependency is not installed")
+def test_checkpoint_registry_download_rename_delete_and_ownership(client):
+    owner = new_player(client, "Checkpoint owner")
+    other = new_player(client, "Other player")
+    trained = client.post(f"/api/p/{owner}/pytorch/train", json={"config": {"dataset": "moons", "hidden": [4], "epochs": 1, "batch_size": 128, "device": "cpu", "seed": 11}, "name": "Tiny model"})
+    assert trained.status_code == 200, trained.text
+    checkpoint_id = trained.json()["checkpoint_id"]
+    listed = client.get(f"/api/p/{owner}/checkpoints").json()
+    assert len(listed) == 1 and listed[0]["id"] == checkpoint_id and listed[0]["available"] is True
+    assert len(listed[0]["sha256"]) == 64 and listed[0]["size_bytes"] > 0
+    assert client.get(f"/api/p/{other}/checkpoints/{checkpoint_id}").status_code == 404
+    renamed = client.patch(f"/api/p/{owner}/checkpoints/{checkpoint_id}", json={"name": "Deployable baseline"})
+    assert renamed.status_code == 200 and renamed.json()["name"] == "Deployable baseline"
+    download = client.get(f"/api/p/{owner}/checkpoints/{checkpoint_id}/download")
+    assert download.status_code == 200 and len(download.content) == listed[0]["size_bytes"]
+    deleted = client.delete(f"/api/p/{owner}/checkpoints/{checkpoint_id}")
+    assert deleted.status_code == 200 and deleted.json()["deleted"] is True
+    assert client.get(f"/api/p/{owner}/checkpoints").json() == []
 
 
 @pytest.mark.skipif(not torch_engine.availability()["installed"], reason="optional PyTorch dependency is not installed")

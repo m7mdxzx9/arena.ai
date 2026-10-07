@@ -1,49 +1,59 @@
 # Capability Matrix
 
-Statuses mean: **complete** = usable UI + real logic + persistence/validation where applicable + meaningful tests; **partial** = useful implementation exists but one or more requested dimensions remain; **optional** = complete when a declared local dependency is present; **simulator** = intentionally educational and labelled; **planned** = not implemented.
+Status rules are deliberately strict:
+
+- **Complete** — usable UI and logic, persistence/validation where applicable, and meaningful tests.
+- **Partial** — useful implementation exists, but at least one important requested dimension is absent.
+- **Optional** — behavior is real when a declared local dependency is installed; an unavailable dependency is reported, never simulated.
+- **Simulator** — intentionally educational and explicitly labelled.
+- **Absent** — not implemented.
+
+This matrix describes the repository at this revision. It is not a roadmap and does not count a backend-only endpoint as a complete product feature.
 
 | Capability | Status | Evidence / limitation |
 |---|---|---|
-| Profiles and settings | Complete | SQLite player records, mode/settings updates, profile UI |
+| Profiles and settings | Complete | SQLite player records, validated settings, profile UI |
 | XP, ranks, achievements, equipment | Complete (preserved) | Existing game services and UI remain connected |
-| Missions and boss battles | Complete (preserved) | Durable progress and real lab-backed challenges |
-| BKT mastery | Complete (preserved) | Per-attempt probability state and tests |
-| Leitner review | Complete (preserved) | Due scheduling and profile review UI |
-| Experiment history/comparison | Complete (preserved) | Reproducible run records, notes and comparisons |
-| Classical scikit-learn ML | Complete (preserved/extended) | Real fitting, metrics, splits, diagnostics, uploaded datasets |
-| NumPy neural network | Complete, educational | Real transparent forward/backprop; labelled separately |
-| Code Dojo | Complete (preserved) | Sandboxed exercise evaluator; no agent access |
-| Educational RAG lab | Simulator (preserved) | Deterministic bundled-corpus learning surface |
-| Educational agent security lab | Simulator (preserved) | Deterministic state machine, clearly labelled |
-| Structured English/Arabic resources | Partial | Shell/settings/new labs translated; some legacy campaign/widget prose remains English |
-| Persisted language and document RTL | Complete | Player/browser persistence, `<html lang dir>`, unit tests |
-| RTL layout and technical LTR isolation | Complete | Global RTL stylesheet, Arabic font stack, LTR code/charts/JSON |
-| Secure personal dataset workspace | Complete | CSV/TSV/JSON/XLSX, strict limits, UUID ownership, profile/delete/train UI |
-| Open Lab | Complete | Non-linear routed launch surface |
-| Real PyTorch MLP | Optional complete | Real training/curves/device/checkpoints; needs PyTorch install |
-| Real CNN | Optional complete | Conv2d training, curves, confusion, predictions, feature maps, augmentation |
-| CUDA reporting | Complete | Runtime capability/device count and explicit CPU fallback warning |
-| Local checkpoint management | Complete for generated checkpoints | Local state_dict + metadata; arbitrary checkpoint upload intentionally unsupported |
-| Provider abstraction | Complete | Protocol and bounded Ollama implementation |
-| Model Hub/Ollama discovery | Optional complete | Real health/model metadata; explicit offline state |
-| Offline tutor | Complete | Curated adaptive context, always local |
-| Local-LLM tutor | Optional complete | Ollama generation with selected model and bounded context |
-| Mistake Journal | Complete | Experiment-derived records, persistence, filters and spaced review |
-| Personal document RAG | Complete | PDF/TXT/MD/DOCX, bounded extraction, hybrid retrieval, citations, extractive mode |
-| Grounded local RAG generation | Optional complete | Ollama path, injection labelling and explicit failures |
-| Controlled real Agent Lab | Optional complete | Structured model decisions, fixed tools, permissions, timeouts, memory and trace |
-| Agent-vs-agent arena | Optional complete | Same tasks across 2–4 configs; deterministic phrase/completion scoring, step/latency metrics and saved run |
-| Prompt Lab | Optional complete | Persistent versions/variables/comparison and real Ollama execution |
-| Central Evaluation Lab | Complete | Persistent sets, nine deterministic evaluator types and result runs |
-| LLM-as-judge | Planned by design | Not added without calibration; deterministic evaluators are labelled honestly |
-| Portfolio | Complete | Run-grounded editable case studies and Markdown/HTML/JSON export |
-| Backup/restore | Complete for portable records | Versioned, redacted, atomic merge; binary datasets/documents/checkpoints excluded by manifest |
-| CV expansion | Complete for bounded scope | CNN, training augmentation, feature maps, confusion and mistakes |
-| NLP expansion | Complete (preserved) | Tokenization, embeddings, attention, n-gram LM, sentiment workbench |
-| Docker packaging | Complete | Non-root multi-stage image, persistent volume, healthcheck, Compose |
-| Authentication/multi-tenancy | Not in scope / absent | Local single-user architecture; unsafe to expose directly |
-| Comprehensive documentation | Complete for implemented systems | Required architecture/learning/ML/RAG/agent/security/localization/testing docs |
+| Missions and boss battles | Complete mechanics; localization partial | Durable progression and real lab-backed actions; portions of legacy narrative remain English |
+| BKT mastery | Complete (preserved) | Per-attempt probability updates and tests |
+| Leitner review | Complete (preserved) | Due scheduling and review UI |
+| Experiment history/comparison | Partial | Saved runs, notes and comparisons work; lifecycle management and richer comparison workflows remain limited |
+| Classical scikit-learn ML | Complete for current task catalogue | Real fitting, splits, diagnostics and player-owned uploaded data; bounded tabular tasks only |
+| NumPy neural network | Complete, educational | Real transparent forward/backprop, explicitly separated from PyTorch |
+| Code Dojo | Complete (preserved) | Bounded exercise evaluator; agents cannot access it as a shell |
+| Educational RAG lab | Simulator (preserved) | Deterministic bundled-corpus learning surface, explicitly labelled |
+| Educational agent security lab | Simulator (preserved) | Deterministic state machine, explicitly labelled |
+| Structured English/Arabic resources | **Partial** | The shell and newer personal-lab pages use structured locale files; significant legacy campaign, workbench and widget prose still remains English |
+| Persisted language and document RTL | Complete | Player/browser persistence and `<html lang dir>` updates are tested |
+| RTL layout and technical LTR isolation | Substantially complete | Global RTL layout/font rules and LTR code/chart/JSON isolation; untranslated legacy surfaces still need review |
+| Secure personal dataset workspace | Complete for supported formats | CSV/TSV/JSON/XLSX limits, normalized server storage, ownership, inspect/delete/train UI and tests |
+| Open Lab launch surface | Complete | Routed non-linear launcher for implemented labs |
+| Real PyTorch MLP | Optional, partial scope | Real CPU/CUDA training, curves and generated checkpoints; built-ins plus uploaded mixed-type classification, but not general regression/multilabel/time-series training |
+| Real CNN | Optional, partial scope | Real Conv2d digit training, curves, confusion, predictions, feature maps and bounded augmentation; not a general image-dataset workspace |
+| CUDA reporting | Complete | Runtime/device reporting and explicit CPU fallback; CUDA execution cannot be verified on CPU-only CI |
+| Generated-checkpoint manager | Complete | Ownership, hash/size metadata, rename/download/delete UI and tests; arbitrary checkpoint upload is intentionally unsupported to avoid unsafe deserialization |
+| Additive database migrations | Complete for schema v2 | Migration ledger plus `PRAGMA user_version`; existing databases are upgraded additively |
+| Provider abstraction | Complete for Ollama | Typed bounded protocol and one concrete local provider; no second provider implementation yet |
+| Model Hub / Ollama lifecycle | Optional, substantially complete | Health, metadata, pull and confirmed delete UI; pull is synchronous and has no resumable/background progress stream |
+| Offline tutor | Complete for curated catalogue | Local curated answers with player/run context; not a generative model |
+| Local-LLM tutor | Optional | Real selected Ollama model with bounded context and explicit provider errors |
+| Mistake Journal | Complete for current sources | Persistent experiment-derived records, filtering and spaced review |
+| Personal document RAG | Complete for supported documents | Bounded PDF/TXT/MD/DOCX extraction, normalized text storage, hybrid retrieval, citations and extractive answer mode |
+| Grounded local RAG generation | Optional | Real Ollama generation with cited context and prompt-injection warnings; no fabricated fallback |
+| Controlled real Agent Lab | Optional, substantially complete | Fixed schemas/tools, explicit permissions, timeouts, visible memory, traces and configuration CRUD; no shell tool |
+| Agent-vs-agent arena | Optional, partial evaluation depth | Same bounded tasks across 2–4 configurations with deterministic scoring and saved summaries; no human rubric or calibrated judge |
+| Prompt Lab | Optional, partial | Persistent prompts/immutable versions, variables, CRUD and real Ollama execution; richer side-by-side A/B workflow is still limited |
+| Central Evaluation Lab | Complete for deterministic evaluators | Persistent dataset CRUD, nine deterministic evaluator types and saved result runs |
+| LLM-as-judge | Absent by design | Not represented as implemented; deterministic evaluation is used instead |
+| Portfolio | Complete for case studies | Run-grounded editable CRUD plus Markdown/HTML/JSON export |
+| Compact JSON backup | Complete for declared records | Versioned, redacted, validated transactional profile merge; exclusions are explicit |
+| Full archive backup | Complete for guarded local assets | `.nfbackup` UI/API includes normalized datasets/documents and opaque generated checkpoints; validates paths/counts/sizes/formats/SHA-256 and never deserializes checkpoints. Agent execution traces remain intentionally excluded |
+| CV expansion | **Partial** | Educational convolution visual plus digit CNN; no owned image-folder ingestion, transfer learning or detection/segmentation workflow |
+| NLP expansion | **Partial** | Tokenization, embeddings, attention, n-gram generation and tabular sentiment examples; no general transformer fine-tuning/evaluation workspace |
+| Docker packaging | Implemented, unverified here | Non-root multi-stage image, persistent volume, healthcheck and Compose exist; this environment has no Docker executable, so no image-build claim is made |
+| Authentication / network multi-tenancy | Absent | Local profile separation is not authentication; the app must not be exposed as a hostile multi-user service |
+| Documentation | Partial | Architecture/security/testing/localization documents exist, but capability and legacy-content documentation still need continuing reconciliation |
 
 ## Audit conclusion
 
-The original repository was already a substantial working game, not a mockup. The upgrade therefore preserved its architecture and added guarded modules/routes/pages rather than replacing it. Claims above intentionally distinguish optional local-model/PyTorch behavior, educational simulators and planned work.
+The repository is a substantial working learning game with a growing personal laboratory. It is not yet accurate to call the entire requested product complete. In particular, full legacy Arabic localization, broader CV/NLP workflows, deeper experiment/prompt evaluation workflows, and Docker/CUDA/Ollama runtime verification remain open. Educational simulators are retained and labelled separately from real PyTorch, retrieval and local-model execution.

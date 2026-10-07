@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { post, type Any } from '../api'
 import { useI18n, Ltr } from '../i18n'
 import { ConfusionMatrix, LineChart, PALETTE } from '../charts'
-import { Btn, Card, ErrorBox, Loading, Pill, Select, Slider, Tabs, fmt, pct, useGame } from '../ui'
+import { Btn, Card, ErrorBox, Loading, Pill, Select, Slider, Tabs, fmt, pct, useApi, useGame } from '../ui'
 
 function PixelImage({ pixels, label }: { pixels: number[][]; label?: string }) {
   return (
@@ -40,11 +40,30 @@ function Curves({ result }: { result: Any }) {
 function MlpLab() {
   const { t } = useI18n()
   const { pid, reward } = useGame()
+  const personalDatasets = useApi<Any[]>(`/api/p/${pid}/datasets`)
   const [config, setConfig] = useState<Any>({ dataset: 'moons', hidden: [32, 16], activation: 'relu', optimizer: 'adam', learning_rate: 0.001, batch_size: 32, epochs: 30, dropout: 0.1, device: 'auto', seed: 42 })
   const [busy, setBusy] = useState(false)
   const [output, setOutput] = useState<Any>(null)
   const [error, setError] = useState<string | null>(null)
   const set = (key: string, value: Any) => setConfig((current: Any) => ({ ...current, [key]: value }))
+  const bundled = ['moons', 'circles', 'spiral', 'xor', 'linear2d', 'blobs', 'student_success', 'digits', 'overfit_lab']
+  const selectedPersonal = personalDatasets.data?.find((dataset) => `user:${dataset.id}` === config.dataset)
+  const datasetOptions = [
+    ...bundled.map((value) => ({ value, label: value })),
+    ...(personalDatasets.data || []).map((dataset) => ({ value: `user:${dataset.id}`, label: `${t('torch.personalPrefix')}: ${dataset.name}` })),
+  ]
+  const changeDataset = (value: string) => {
+    const dataset = personalDatasets.data?.find((item) => `user:${item.id}` === value)
+    if (!dataset) { setConfig((current: Any) => ({ ...current, dataset: value, target: undefined, features: undefined })); return }
+    const columns = dataset.columns.map((column: Any) => column.name) as string[]
+    const target = columns[columns.length - 1] || ''
+    setConfig((current: Any) => ({ ...current, dataset: value, target, features: columns.filter((column) => column !== target) }))
+  }
+  const changeTarget = (target: string) => {
+    const columns = (selectedPersonal?.columns || []).map((column: Any) => column.name) as string[]
+    setConfig((current: Any) => ({ ...current, target, features: columns.filter((column) => column !== target) }))
+  }
+  const toggleFeature = (feature: string) => setConfig((current: Any) => ({ ...current, features: (current.features || []).includes(feature) ? current.features.filter((value: string) => value !== feature) : [...(current.features || []), feature] }))
   const run = async () => {
     setBusy(true); setError(null); setOutput(null)
     try { const response = await post(`/api/p/${pid}/pytorch/train`, { config }); setOutput(response); reward(response) } catch (e: Any) { setError(e.message) } finally { setBusy(false) }
@@ -53,7 +72,13 @@ function MlpLab() {
     <div className="grid g-side">
       <div className="col">
         <Card title={t('torch.architecture')} icon="🧬">
-          <Select label="Dataset" value={config.dataset} onChange={(value) => set('dataset', value)} options={['moons', 'circles', 'spiral', 'xor', 'linear2d', 'blobs', 'student_success', 'digits', 'overfit_lab']} />
+          <Select label={t('torch.dataset')} value={config.dataset} onChange={changeDataset} options={datasetOptions} />
+          {selectedPersonal && <div className="personal-torch-config">
+            <Select label={t('common.target')} value={config.target || ''} onChange={changeTarget} options={selectedPersonal.columns.map((column: Any) => ({ value: column.name, label: column.name }))} />
+            <div className="field-l">{t('datasets.chooseFeatures')} ({config.features?.length || 0})</div>
+            <div className="chips">{selectedPersonal.columns.filter((column: Any) => column.name !== config.target).map((column: Any) => <button key={column.name} className={`chip technical-ltr ${config.features?.includes(column.name) ? 'on' : ''}`} onClick={() => toggleFeature(column.name)}>{column.name}</button>)}</div>
+            <div className="info-box">{t('torch.personalSafety')}</div>
+          </div>}
           <div className="field-l">{t('torch.hidden')}</div>
           {config.hidden.map((neurons: number, index: number) => <div className="row" key={index}><div style={{ flex: 1 }}><Slider label={`layer ${index + 1}`} value={neurons} min={2} max={256} onChange={(value) => set('hidden', config.hidden.map((item: number, i: number) => i === index ? value : item))} /></div><button className="link" onClick={() => set('hidden', config.hidden.filter((_: number, i: number) => i !== index))}>✕</button></div>)}
           {config.hidden.length < 4 && <button className="link" onClick={() => set('hidden', [...config.hidden, 16])}>+ layer</button>}
@@ -66,7 +91,7 @@ function MlpLab() {
           <Select label={t('torch.batchSize')} value={String(config.batch_size)} onChange={(value) => set('batch_size', Number(value))} options={['8', '16', '32', '64', '128']} />
           <Slider label={t('torch.epochs')} value={config.epochs} min={1} max={100} onChange={(value) => set('epochs', value)} />
           <Select label={t('torch.preferredDevice')} value={config.device} onChange={(value) => set('device', value)} options={[{ value: 'auto', label: t('torch.autoDevice') }, { value: 'cpu', label: 'CPU' }, { value: 'cuda', label: 'CUDA GPU' }]} />
-          <Btn onClick={run} disabled={busy}>{busy ? t('torch.training') : `▶ ${t('torch.train')}`}</Btn>
+          <Btn onClick={run} disabled={busy || (selectedPersonal && (!config.target || !config.features?.length))}>{busy ? t('torch.training') : `▶ ${t('torch.train')}`}</Btn>
         </Card>
       </div>
       <div className="col">

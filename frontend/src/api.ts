@@ -78,6 +78,7 @@ async function request(method: string, url: string, body?: unknown): Promise<Any
 export const get = (url: string) => request('GET', url)
 export const post = (url: string, body: unknown = {}) => request('POST', url, body)
 export const patch = (url: string, body: unknown = {}) => request('PATCH', url, body)
+export const put = (url: string, body: unknown = {}) => request('PUT', url, body)
 export const del = (url: string) => request('DELETE', url)
 
 export async function upload(url: string, file: File, fields: Record<string, string | number> = {}): Promise<Any> {

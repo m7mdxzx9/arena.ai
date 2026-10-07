@@ -7,6 +7,7 @@ const LABS = [
   { icon: '⚙️', title: 'openLab.mlTitle', desc: 'openLab.mlDesc', path: '/workbench' },
   { icon: '🔥', title: 'openLab.torchTitle', desc: 'openLab.torchDesc', path: '/pytorch' },
   { icon: '👁️', title: 'openLab.cnnTitle', desc: 'openLab.cnnDesc', path: '/pytorch/cnn' },
+  { icon: '💾', title: 'openLab.checkpointsTitle', desc: 'openLab.checkpointsDesc', path: '/checkpoints' },
   { icon: '📖', title: 'openLab.ragTitle', desc: 'openLab.ragDesc', path: '/personal-rag' },
   { icon: '🧩', title: 'openLab.modelTitle', desc: 'openLab.modelDesc', path: '/models' },
   { icon: '🧑‍🏫', title: 'openLab.tutorTitle', desc: 'openLab.tutorDesc', path: '/tutor' },

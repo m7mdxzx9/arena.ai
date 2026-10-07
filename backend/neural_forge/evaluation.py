@@ -78,6 +78,24 @@ def create_dataset(db: DB, player_id: int, name: str, cases: list[dict[str, Any]
     return get_dataset(db, player_id, dataset_id)
 
 
+def update_dataset(db: DB, player_id: int, dataset_id: str, name: str, cases: list[dict[str, Any]]) -> dict[str, Any]:
+    get_dataset(db, player_id, dataset_id)
+    if not 1 <= len(cases) <= 500:
+        raise ValueError("An evaluation dataset must contain 1–500 cases.")
+    validated = [validate_case(case, index) for index, case in enumerate(cases)]
+    ids = [case["id"] for case in validated]
+    if len(set(ids)) != len(ids):
+        raise ValueError("Evaluation case IDs must be unique.")
+    db.x("UPDATE evaluation_datasets SET name=?, cases_json=?, updated_at=? WHERE id=? AND player_id=?", (name.strip()[:100] or "Evaluation Dataset", json.dumps(validated, ensure_ascii=False), time.time(), dataset_id, player_id))
+    return get_dataset(db, player_id, dataset_id)
+
+
+def delete_dataset(db: DB, player_id: int, dataset_id: str) -> dict[str, Any]:
+    get_dataset(db, player_id, dataset_id)
+    db.x("DELETE FROM evaluation_datasets WHERE id=? AND player_id=?", (dataset_id, player_id))
+    return {"deleted": True, "id": dataset_id}
+
+
 def list_datasets(db: DB, player_id: int) -> list[dict[str, Any]]:
     rows = db.q("SELECT id, name, cases_json, created_at, updated_at FROM evaluation_datasets WHERE player_id=? ORDER BY updated_at DESC", (player_id,))
     return [{"id": row["id"], "name": row["name"], "cases": len(json.loads(row["cases_json"])), "created_at": row["created_at"], "updated_at": row["updated_at"]} for row in rows]

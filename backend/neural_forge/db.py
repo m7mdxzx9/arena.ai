@@ -9,6 +9,11 @@ import time
 from pathlib import Path
 
 DEFAULT_PATH = Path(os.environ.get("NEURAL_FORGE_DB", Path(__file__).resolve().parent.parent / "neural_forge_data" / "neural_forge.sqlite3"))
+CURRENT_SCHEMA_VERSION = 2
+MIGRATION_NAMES = {
+    1: "personal_workspace_tables",
+    2: "managed_model_checkpoints",
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS players (
@@ -195,6 +200,24 @@ CREATE TABLE IF NOT EXISTS evaluation_datasets (
   created_at REAL NOT NULL,
   updated_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS model_checkpoints (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  run_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_checkpoints_player ON model_checkpoints(player_id, created_at);
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at REAL NOT NULL
+);
 """
 
 
@@ -207,7 +230,16 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         with self.lock:
+            # All schema SQL is additive/idempotent so databases from the original
+            # course can open directly. The migration ledger makes future upgrades
+            # explicit and lets diagnostics report the exact on-disk schema level.
             self.conn.executescript(SCHEMA)
+            for version, name in MIGRATION_NAMES.items():
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES (?,?,?)",
+                    (version, name, time.time()),
+                )
+            self.conn.execute(f"PRAGMA user_version={CURRENT_SCHEMA_VERSION}")
             self.conn.execute("PRAGMA journal_mode=WAL") if self.path != ":memory:" else None
             self.conn.commit()
 

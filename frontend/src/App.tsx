@@ -25,6 +25,7 @@ import Profile from './pages/Profile'
 const OpenLab = lazy(() => import('./pages/OpenLab'))
 const DatasetsPage = lazy(() => import('./pages/Datasets'))
 const PyTorchLab = lazy(() => import('./pages/PyTorchLab'))
+const CheckpointsPage = lazy(() => import('./pages/Checkpoints'))
 const ModelHub = lazy(() => import('./pages/ModelHub'))
 const TutorPage = lazy(() => import('./pages/Tutor'))
 const MistakesPage = lazy(() => import('./pages/Mistakes'))
@@ -52,6 +53,7 @@ const NAV: { sectionKey: string; items: NavItem[] }[] = [
     { path: 'predict', labelKey: 'nav.prediction', icon: '🔮' },
     { path: 'nn', labelKey: 'nav.neural', icon: '🧠', equip: 'neural_forge' },
     { path: 'pytorch', labelKey: 'nav.pytorch', icon: '🔥' },
+    { path: 'checkpoints', labelKey: 'nav.checkpoints', icon: '💾' },
     { path: 'language', labelKey: 'nav.language', icon: '💬', equip: 'tokenizer_press' },
     { path: 'rag', labelKey: 'nav.rag', icon: '📘', equip: 'vector_vault' },
     { path: 'personal-rag', labelKey: 'nav.personalRag', icon: '📚' },
@@ -112,6 +114,7 @@ function Shell() {
     case 'predict': content = <PredictionLab focus={rest[0]} />; break
     case 'nn': content = <NNLabPage />; break
     case 'pytorch': content = <PyTorchLab initialTab={rest[0] === 'cnn' ? 'cnn' : 'mlp'} />; break
+    case 'checkpoints': content = <CheckpointsPage />; break
     case 'language': content = <LanguageLab />; break
     case 'rag': content = <RagPage />; break
     case 'personal-rag': content = <PersonalRagPage />; break

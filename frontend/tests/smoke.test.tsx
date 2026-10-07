@@ -48,7 +48,7 @@ const ROUTES = [
   '/data/student_success', '/data/data_chaos', '/data/spam', '/data/customer_segments', '/workbench', '/workbench/house_prices', '/history', '/nn', '/predict', '/predict/lr_explosion',
   '/language', '/rag', '/agent', '/dojo', '/dojo/ex_variables', '/missions', '/mission/m_student', '/bosses',
   '/boss/overfitter', '/boss/leak', '/boss/imbalance', '/boss/chaos', '/boss/lr_beast', '/boss/hallucination', '/boss/retrieval', '/boss/injection',
-  '/research', '/profile', '/open-lab', '/datasets', '/pytorch', '/pytorch/cnn', '/models', '/tutor', '/mistakes', '/personal-rag', '/real-agent', '/prompt-lab', '/evaluation-lab', '/portfolio', '/backup',
+  '/research', '/profile', '/open-lab', '/datasets', '/pytorch', '/pytorch/cnn', '/checkpoints', '/models', '/tutor', '/mistakes', '/personal-rag', '/real-agent', '/prompt-lab', '/evaluation-lab', '/portfolio', '/backup',
 ]
 
 describe('every route renders without errors', () => {
