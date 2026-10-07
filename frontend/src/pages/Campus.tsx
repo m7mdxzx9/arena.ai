@@ -1,5 +1,6 @@
 import type { Any } from '../api'
 import { Ring } from '../charts'
+import { useI18n } from '../i18n'
 import { Bar, Btn, Card, Pill, go, useGame } from '../ui'
 
 const ROUTES: [string, string][] = [
@@ -14,6 +15,7 @@ export function recLink(r: Any) {
 }
 
 export default function Campus() {
+  const { t } = useI18n()
   const { ov } = useGame()
   const areas: Record<string, Any> = ov.areas
   const c = ov.counts
@@ -21,8 +23,8 @@ export default function Campus() {
     <div className="stack">
       <div className="topbar">
         <div>
-          <div className="kicker">Welcome back, {ov.player.name}</div>
-          <h1 style={{ margin: 0 }}>The Campus</h1>
+          <div className="kicker">{t('campus.welcome', { name: ov.player.name })}</div>
+          <h1 style={{ margin: 0 }}>{t('campus.title')}</h1>
         </div>
         <div className="spacer" />
         <div className="xpbox"><span className="rank">🎖️ {ov.rank.title}</span><span>{ov.player.xp} XP</span></div>
@@ -49,8 +51,8 @@ export default function Campus() {
         ))}
       </div>
       <div className="grid g3">
-        <Card title="Next up" icon="🧭" className="glow">
-          {ov.recommendations.length === 0 && <p className="muted">Everything available is proficient. Try a boss, a research challenge, or Free Play.</p>}
+        <Card title={t('campus.nextUp')} icon="🧭" className="glow">
+          {ov.recommendations.length === 0 && <p className="muted">{t('campus.allReady')}</p>}
           <div className="col">
             {ov.recommendations.map((r: Any) => (
               <div key={r.kind + r.id} className="row between" style={{ gap: '0.5rem' }}>
@@ -58,15 +60,15 @@ export default function Campus() {
                   <div><span style={{ marginRight: 6 }}>{REC_ICON[r.kind]}</span><b>{r.title}</b></div>
                   <small className="muted">{r.why}</small>
                 </div>
-                <Btn small onClick={() => go(recLink(r))}>Go</Btn>
+                <Btn small onClick={() => go(recLink(r))}>{t('campus.go')}</Btn>
               </div>
             ))}
           </div>
         </Card>
-        <Card title="Progress" icon="📈">
+        <Card title={t('campus.progress')} icon="📈">
           <div className="row" style={{ gap: '1rem', marginBottom: '0.8rem' }}>
             <Ring value={c.proficient / c.concepts} size={64} label={`${c.proficient}`} />
-            <div><b>{c.proficient}</b> / {c.concepts} concepts proficient<br /><small className="muted">{c.mastered} mastered · {c.learning} in progress</small></div>
+            <div>{t('campus.conceptsProficient', { done: c.proficient, total: c.concepts })}<br /><small className="muted">{t('campus.masteredProgress', { mastered: c.mastered, learning: c.learning })}</small></div>
           </div>
           <div className="kv">
             <dt>Missions</dt><dd>{c.missions_done} / {c.missions}</dd>
@@ -75,7 +77,7 @@ export default function Campus() {
           </div>
           {ov.rank.next && (
             <div style={{ marginTop: '0.8rem' }}>
-              <small className="muted">Next rank: <b className="rank">{ov.rank.next.title}</b></small>
+              <small className="muted">{t('campus.nextRank')}: <b className="rank">{ov.rank.next.title}</b></small>
               <div className="col" style={{ gap: '0.3rem', marginTop: '0.3rem' }}>
                 <Bar value={ov.player.xp} max={ov.rank.next.xp} label={`${ov.player.xp} / ${ov.rank.next.xp} XP`} />
                 <Bar value={c.proficient} max={ov.rank.next.proficient || 1} label={`${c.proficient} / ${ov.rank.next.proficient} proficient`} />
@@ -84,8 +86,8 @@ export default function Campus() {
             </div>
           )}
         </Card>
-        <Card title="Recent activity" icon="📜">
-          {ov.events.length === 0 && <p className="muted">Your XP log will appear here.</p>}
+        <Card title={t('campus.recent')} icon="📜">
+          {ov.events.length === 0 && <p className="muted">{t('campus.xpEmpty')}</p>}
           {ov.events.map((e: Any, i: number) => (
             <div key={i} className="row between" style={{ fontSize: '0.85rem', padding: '0.2rem 0' }}>
               <span>{e.reason}</span><Pill kind="amber">+{e.xp}</Pill>

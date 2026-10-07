@@ -9,6 +9,11 @@ import time
 from pathlib import Path
 
 DEFAULT_PATH = Path(os.environ.get("NEURAL_FORGE_DB", Path(__file__).resolve().parent.parent / "neural_forge_data" / "neural_forge.sqlite3"))
+CURRENT_SCHEMA_VERSION = 2
+MIGRATION_NAMES = {
+    1: "personal_workspace_tables",
+    2: "managed_model_checkpoints",
+}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS players (
@@ -79,6 +84,140 @@ CREATE TABLE IF NOT EXISTS reflections (
   text TEXT NOT NULL,
   ts REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS uploaded_datasets (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  format TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  rows INTEGER NOT NULL,
+  columns_json TEXT NOT NULL,
+  warnings_json TEXT NOT NULL DEFAULT '[]',
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_uploaded_datasets_player ON uploaded_datasets(player_id, created_at);
+CREATE TABLE IF NOT EXISTS mistakes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id INTEGER NOT NULL,
+  concept TEXT NOT NULL,
+  category TEXT NOT NULL,
+  mission_id TEXT,
+  run_id INTEGER,
+  mistake_type TEXT NOT NULL,
+  player_action TEXT NOT NULL,
+  correct_principle TEXT NOT NULL,
+  explanation TEXT NOT NULL,
+  example TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL,
+  review_count INTEGER NOT NULL DEFAULT 0,
+  resolved INTEGER NOT NULL DEFAULT 0,
+  due_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mistakes_player ON mistakes(player_id, resolved, due_at);
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  format TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  text_chars INTEGER NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_documents_player ON documents(player_id, created_at);
+CREATE TABLE IF NOT EXISTS document_chunks (
+  id TEXT PRIMARY KEY,
+  document_id TEXT NOT NULL,
+  player_id INTEGER NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  metadata TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_document_chunks_player ON document_chunks(player_id, document_id);
+CREATE TABLE IF NOT EXISTS prompts (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS prompt_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  prompt_id TEXT NOT NULL,
+  player_id INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  system_text TEXT NOT NULL,
+  user_text TEXT NOT NULL,
+  variables TEXT NOT NULL DEFAULT '{}',
+  change_note TEXT NOT NULL DEFAULT '',
+  created_at REAL NOT NULL,
+  UNIQUE(prompt_id, version)
+);
+CREATE TABLE IF NOT EXISTS portfolio_projects (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_configurations (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  model TEXT NOT NULL,
+  system_prompt TEXT NOT NULL,
+  tools_json TEXT NOT NULL,
+  permissions_json TEXT NOT NULL,
+  memory_json TEXT NOT NULL DEFAULT '[]',
+  max_steps INTEGER NOT NULL DEFAULT 6,
+  timeout_seconds REAL NOT NULL DEFAULT 60,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_config_player ON agent_configurations(player_id, updated_at);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  configuration_id TEXT NOT NULL,
+  request TEXT NOT NULL,
+  trace_json TEXT NOT NULL,
+  final_answer TEXT,
+  status TEXT NOT NULL,
+  steps INTEGER NOT NULL,
+  duration_ms REAL NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_player ON agent_runs(player_id, created_at);
+CREATE TABLE IF NOT EXISTS evaluation_datasets (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  cases_json TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS model_checkpoints (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  run_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_model_checkpoints_player ON model_checkpoints(player_id, created_at);
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at REAL NOT NULL
+);
 """
 
 
@@ -91,7 +230,16 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         with self.lock:
+            # All schema SQL is additive/idempotent so databases from the original
+            # course can open directly. The migration ledger makes future upgrades
+            # explicit and lets diagnostics report the exact on-disk schema level.
             self.conn.executescript(SCHEMA)
+            for version, name in MIGRATION_NAMES.items():
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES (?,?,?)",
+                    (version, name, time.time()),
+                )
+            self.conn.execute(f"PRAGMA user_version={CURRENT_SCHEMA_VERSION}")
             self.conn.execute("PRAGMA journal_mode=WAL") if self.path != ":memory:" else None
             self.conn.commit()
 
@@ -113,7 +261,7 @@ class DB:
     # -- players
     def create_player(self, name: str, mode: int = 1) -> int:
         return self.x("INSERT INTO players(name, mode, xp, settings, created_at) VALUES (?,?,?,?,?)",
-                      (name, mode, 0, json.dumps({"free_play": False, "show_code": mode >= 4}), time.time()))
+                      (name, mode, 0, json.dumps({"free_play": False, "show_code": mode >= 4, "language": "en", "default_model": None}), time.time()))
 
     def player(self, pid: int) -> dict | None:
         r = self.one("SELECT * FROM players WHERE id=?", (pid,))

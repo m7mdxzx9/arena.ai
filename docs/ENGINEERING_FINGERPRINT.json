@@ -1,0 +1,48 @@
+{
+  "artifact": "neural-forge-engineering-fingerprint",
+  "schema_version": 1,
+  "date": "2026-10-07",
+  "repository": "m7mdxzx9/arena.ai",
+  "base_commit": "e26537851e5e4450807dacab014d79ea58095b4f",
+  "working_branch": "arena/d8508d0d-arena-ai",
+  "architecture": {
+    "frontend": ["React 19", "TypeScript", "Vite", "structured en/ar resources", "RTL/LTR isolation"],
+    "backend": ["FastAPI", "SQLite", "scikit-learn", "NumPy", "optional PyTorch", "optional Ollama"],
+    "deployment": ["single-origin SPA/API", "non-root Docker image", "persistent local volume"]
+  },
+  "implementation_markers": [
+    "player-owned UUID dataset and document stores",
+    "real CPU-tested PyTorch MLP and Conv2d paths",
+    "deterministic local hash retrieval explicitly distinguished from neural embeddings",
+    "agent tools gated by separate enabled-tool and permission checks",
+    "observable action traces without private chain-of-thought",
+    "versioned secret-redacted atomic merge backup",
+    "experiment-grounded portfolio source snapshots",
+    "resource-key parity test with technical LTR under Arabic RTL"
+  ],
+  "truth_constraints": {
+    "paid_api_required": false,
+    "core_campaign_offline": true,
+    "ollama_optional": true,
+    "pytorch_optional": true,
+    "educational_simulators_preserved_and_labelled": true,
+    "authentication_present": false,
+    "legacy_arabic_coverage_complete": false
+  },
+  "required_artifacts": [
+    "ARCHITECTURE.md",
+    "LEARNING_SYSTEM.md",
+    "ADAPTIVE_LEARNING.md",
+    "ML_ENGINE.md",
+    "PYTORCH_LAB.md",
+    "RAG.md",
+    "AGENTS.md",
+    "SECURITY.md",
+    "LOCALIZATION.md",
+    "TESTING.md",
+    "CAPABILITY_MATRIX.md",
+    "ENGINEERING_SIGNATURE.md",
+    "MICRO_BENCHMARK.md",
+    "CHANGE_MANIFEST.md"
+  ]
+}

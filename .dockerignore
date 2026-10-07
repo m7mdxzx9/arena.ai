@@ -1,0 +1,12 @@
+.git
+.gitignore
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+**/dist
+**/coverage
+backend/neural_forge_data
+*.sqlite3
+*.pt
+*.pth

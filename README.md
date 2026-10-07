@@ -1,6 +1,6 @@
 # NEURAL FORGE
 
-**An educational game that takes you from "what is AI?" to running real experiments the way an AI research scientist does.**
+**An offline-first AI learning game and personal AI laboratory that takes you from “what is AI?” to reproducible local experiments.**
 
 You start as an *AI Beginner* on an AI campus. You learn each idea before you are tested on it. You predict what an experiment will do, then run it on real data. You diagnose what went wrong, fix it, and beat bosses that each stand for a classic ML failure. The top rank is *AI Research Scientist*.
 
@@ -17,7 +17,8 @@ AI Beginner → AI Student → Junior ML Engineer → ML Engineer → AI Enginee
 Requirements: Python ≥ 3.10 and Node ≥ 18. No GPU, no API keys, no paid services, no internet access at runtime.
 
 ```bash
-./run.sh            # first run creates backend/.venv, installs deps, builds the UI
+./run.sh            # creates/updates the venv, installs deps (including PyTorch), builds the UI
+# or: INSTALL_TORCH=0 ./run.sh  # smaller install; PyTorch/CNN lab reports unavailable
 # open http://localhost:8000
 ```
 
@@ -25,8 +26,11 @@ To start the pieces by hand:
 
 ```bash
 # backend (serves the API and the built UI)
-python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements.txt
-(cd frontend && npm install && npm run build)
+python3 -m venv backend/.venv
+backend/.venv/bin/pip install -r backend/requirements.txt
+# optional real PyTorch/CNN engine:
+backend/.venv/bin/pip install -r backend/requirements-torch.txt
+(cd frontend && npm ci && npm run build)
 cd backend && .venv/bin/python -m uvicorn neural_forge.app:app --host 0.0.0.0 --port 8000
 
 # optional: hot-reloading UI dev server on :5173 (proxies /api to :8000)
@@ -35,6 +39,8 @@ cd frontend && npm run dev
 
 Progress is saved in `backend/neural_forge_data/neural_forge.sqlite3`. Set `NEURAL_FORGE_DB=/path/to.sqlite3` to use a different file.
 
+Docker is also supported: `docker compose up --build` serves the app on port 8000 and stores state in the `neural-forge-data` volume. The image runs as a non-root user.
+
 ---
 
 ## What you can do
@@ -42,6 +48,12 @@ Progress is saved in `backend/neural_forge_data/neural_forge.sqlite3`. Set `NEUR
 | Place | What happens there |
 |---|---|
 | **Campus** (11 areas) | Foundation Academy, Data District, ML Workshop, Evaluation Chamber, Neural Network Tower, Computer Vision Lab, Language Intelligence Center, Generative AI Facility, RAG Archives, Agent Arena, Research Institute. Each area levels up visually as you become proficient in its concepts. |
+| **Open Lab** | Non-linear entry to personal datasets, real PyTorch/CNN, local models, tutor, mistake review, personal-document RAG, controlled real agents, prompt versions and deterministic evaluation. |
+| **Personal Dataset Workspace** | Guarded CSV/TSV/JSON/XLSX uploads with profiling, ownership, preprocessing and real saved scikit-learn runs. No pickle or executable formats. |
+| **PyTorch & CNN Lab** | Optional real optimizer/backprop training, CPU/CUDA reporting, learning curves, checkpoints, training augmentation, confusion matrix, image mistakes and feature maps. |
+| **Model/Tutor/RAG/Agent labs** | Optional local Ollama discovery and generation. Offline tutor/retrieval remain available; provider failures are explicit. Agent tools have schemas, permissions, timeouts and observable action traces—never a shell. |
+| **Prompt & Evaluation labs** | Persistent prompt versions and variables plus reusable deterministic evaluators for text, numbers, schemas, citations, tool choice and retrieval. |
+| **Portfolio & Backup** | Experiment-grounded editable case studies with Markdown/HTML/JSON export, and versioned secret-redacted atomic merge backups. |
 | **Knowledge Tree** | 104 concepts in 10 branches: Foundations, Mathematics, Data Science, Machine Learning, Evaluation, Deep Learning, Modern AI, RAG, AI Agents, Responsible AI. Each concept is gated by its prerequisites. |
 | **Lessons** | TEACH → VISUAL → EXAMPLE → (CODE) → GUIDED → PREDICT → PRACTICE → CHALLENGE → REFLECT. Questions are procedurally generated (18 generators), so a retry is a new question, not a memorised one. |
 | **Prediction Lab** | 12 "predict, then run" experiments, e.g. *what happens at learning rate 5?* or *does removing the leaky column lower accuracy?* Your guess is compared with the real result and explained. |
@@ -71,19 +83,25 @@ Progress is saved in `backend/neural_forge_data/neural_forge.sqlite3`. Set `NEUR
 
 This is not a black box. Each concept carries a **Bayesian Knowledge Tracing** estimate of P(known), updated by every answer, prediction, mission, boss phase and code exercise. **Leitner spaced review** schedules revisits. The adaptation rules are explicit: struggle → mini-lesson, visual and easier items, then a retry; mastery → quick checks and harder items. See [docs/ADAPTIVE_LEARNING.md](docs/ADAPTIVE_LEARNING.md).
 
+### English / العربية
+
+Language is selected in Profile & Settings and persists. Arabic enables document-level RTL while code, equations, commands, model identifiers, JSON and charts remain LTR. The shell and personal-lab surfaces use structured bilingual resources; preserved legacy lesson/widget prose that remains English is disclosed in [docs/LOCALIZATION.md](docs/LOCALIZATION.md).
+
 ---
 
 ## Tests
 
 ```bash
-# backend: 95 tests (mastery maths, curriculum integrity, ML correctness vs independent sklearn,
-# NN gradient check, RAG/agent behaviour, sandbox security, every boss beatable / naive fixes fail, full API flows)
+# backend: 117 tests in the latest delivered run
 cd backend && .venv/bin/python -m pytest -q
 
-# UI: renders every route & visual, then plays a lesson, a Workbench run, a mission and boss fights
-# through the real React app (vitest + jsdom) against a running backend
+# UI: 11 tests render all routes/widgets and exercise real gameplay flows
 ./run.sh &            # or any running backend on :8000 (override with NF_API=http://host:port)
 cd frontend && npm run test:ui
+
+# static checks / production bundle
+npm run lint           # 0 errors; 22 preserved warnings in the latest run
+npm run build
 ```
 
 ---
@@ -108,11 +126,14 @@ backend/
     bosses.py         8 boss battles
     playgrounds.py    data for interactive visuals (gradient descent, k-means, attention, …)
     sandbox.py        subprocess runner for learner Python
+    user_datasets.py, torch_engine.py, document_rag.py, real_agent.py
+    prompts.py, evaluation.py, tutor.py, mistakes.py, portfolio.py, backup.py
   tests/              pytest suite
 frontend/
   src/pages, src/labs, src/widgets   React + TypeScript UI (no UI framework, hand-drawn SVG charts)
-  tests/                             vitest UI smoke + gameplay flow tests
-docs/  ARCHITECTURE.md · ADAPTIVE_LEARNING.md · SECURITY.md
+  src/locales, src/i18n.tsx          structured bilingual resources and RTL state
+  tests/                             vitest UI smoke + gameplay flow + unit tests
+docs/                               architecture, learning, engines, RAG, agents, security, localization and testing
 ```
 
 ## Data and licensing
