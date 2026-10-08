@@ -155,7 +155,15 @@ class TutorRequest(BaseModel):
     concept_id: str | None = None
     run_id: int | None = None
     model: str | None = None
-    language: str = "en"
+    language: str = "auto"
+    level: str = "auto"
+    hint_level: int = Field(default=1, ge=1, le=3)
+    use_documents: bool = False
+    document_ids: list[str] | None = None
+
+
+class TutorFeedback(BaseModel):
+    feedback: str = Field(pattern="^(helpful|unclear|answered)$")
 
 
 class MistakeReview(BaseModel):
@@ -169,6 +177,36 @@ class PersonalRagQuery(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     generation: str = "extractive"
     model: str | None = None
+    embedding_provider: str = "statistical_lsa"
+    embedding_model: str | None = Field(default=None, max_length=200)
+    reranker: str = "none"
+    reranking_depth: int = Field(default=20, ge=1, le=100)
+    reranker_model: str | None = Field(default=None, max_length=200)
+    rrf_k: int = Field(default=60, ge=1, le=200)
+    dense_weight: float = Field(default=1.0, ge=0, le=3)
+    lexical_weight: float = Field(default=1.0, ge=0, le=3)
+    context_budget: int = Field(default=1200, ge=30, le=8000)
+    language: str = "en"
+
+
+class DocumentReindex(BaseModel):
+    chunk_size: int = Field(default=180, ge=40, le=500)
+    overlap: int = Field(default=30, ge=0, le=490)
+    embedding_provider: str = "none"
+    embedding_model: str | None = Field(default=None, max_length=200)
+
+
+class RAGEvaluationDataset(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    cases: list[dict[str, Any]] = Field(min_length=1, max_length=250)
+
+
+class RAGEvaluationRun(BaseModel):
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class RAGExperimentCompare(BaseModel):
+    experiment_ids: list[str] = Field(min_length=2, max_length=8)
 
 
 class AgentConfigurationRequest(BaseModel):
@@ -347,7 +385,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.exception_handler(game.GameError)
     async def _game_error(_: Request, exc: game.GameError):
-        return SafeJSON({"error": exc.message}, status_code=exc.status)
+        return SafeJSON({"error": exc.message, "code": exc.code}, status_code=exc.status)
 
     @app.exception_handler(KeyError)
     async def _key_error(_: Request, exc: KeyError):
@@ -359,7 +397,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.exception_handler(document_rag.DocumentError)
     async def _document_error(_: Request, exc: document_rag.DocumentError):
-        return SafeJSON({"error": exc.message, "code": exc.code}, status_code=400)
+        return SafeJSON({"error": exc.message, "code": exc.code}, status_code=exc.status)
 
     @app.exception_handler(checkpoints.CheckpointError)
     async def _checkpoint_error(_: Request, exc: checkpoints.CheckpointError):
@@ -653,17 +691,64 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/p/{pid}/tutor")
     def ai_tutor(pid: int, body: TutorRequest):
+        player = game._player(db, pid)
+        language = body.language if body.language in {"ar", "en"} else player["settings"].get("language", "en")
+        evidence = []
+        suppress_documents = body.use_documents and body.mode in {"hint", "no_answer", "question"}
+        use_documents = body.use_documents and not suppress_documents
+        if use_documents:
+            retrieved = document_rag.query(
+                db, pid, body.question, document_ids=body.document_ids, method="hybrid", top_k=3,
+                generation="extractive", embedding_provider="statistical_lsa", language=language,
+            )
+            evidence = retrieved.get("retrieved", [])
+        try:
+            kwargs = dict(
+                concept_id=body.concept_id, run_id=body.run_id, language=language, level=body.level,
+                hint_level=body.hint_level, rag_evidence=evidence,
+            )
+            if body.source == "offline":
+                result = tutor.curated_answer(db, pid, body.question, body.mode, **kwargs)
+            elif body.source == "ollama":
+                if not body.model:
+                    raise game.GameError("Select a local model first.", code="model_required")
+                result = tutor.local_llm_answer(db, pid, body.question, body.mode, body.model, **kwargs)
+            else:
+                raise game.GameError("Unknown tutor source.", code="unknown_tutor_source")
+            student_context = result.get("player_context") or {}
+            current_experiment = student_context.get("current_experiment") or {}
+            focus_mastery = (student_context.get("mastery") or {}).get("focus") or {}
+            interaction_id = tutor.record_interaction(
+                db, pid, concept_id=result.get("concept_id"), mode=body.mode, level=result.get("level", body.level),
+                source=result["source"], language=language, hint_level=body.hint_level if body.mode == "hint" else 0,
+                rag_used=use_documents, run_id=current_experiment.get("run_id"),
+                mastery_probability=focus_mastery.get("probability"), rag_evidence_count=len(evidence),
+            )
+            result["interaction_id"] = interaction_id
+            result["rag_retrieval"] = {
+                "requested": body.use_documents, "used": use_documents, "suppressed": suppress_documents,
+                "retrieved_count": len(evidence), "citation_ids": result.get("citations", []),
+            }
+            return result
+        except ProviderError:
+            raise
+        except ValueError as exc:
+            raise game.GameError(str(exc), code="invalid_tutor_request") from exc
+
+    @app.post("/api/p/{pid}/tutor/{interaction_id}/feedback")
+    def tutor_feedback(pid: int, interaction_id: str, body: TutorFeedback):
         game._player(db, pid)
         try:
-            if body.source == "offline":
-                return tutor.curated_answer(db, pid, body.question, body.mode, concept_id=body.concept_id, run_id=body.run_id, language=body.language)
-            if body.source == "ollama":
-                if not body.model:
-                    raise game.GameError("Select a local model first.")
-                return tutor.local_llm_answer(db, pid, body.question, body.mode, body.model, concept_id=body.concept_id, run_id=body.run_id, language=body.language)
-            raise game.GameError("Unknown tutor source.")
+            return tutor.feedback(db, pid, interaction_id, body.feedback)
+        except KeyError as exc:
+            raise game.GameError("Tutor interaction not found.", 404, "tutor_interaction_not_found") from exc
         except ValueError as exc:
-            raise game.GameError(str(exc)) from exc
+            raise game.GameError(str(exc), code="invalid_tutor_feedback") from exc
+
+    @app.get("/api/p/{pid}/tutor/analytics")
+    def tutor_analytics(pid: int):
+        game._player(db, pid)
+        return tutor.analytics(db, pid)
 
     @app.get("/api/p/{pid}/mistakes")
     def mistake_records(pid: int, status: str = "all", topic: str | None = None):
@@ -679,7 +764,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
         except KeyError as exc:
             raise game.GameError("Mistake record not found", 404) from exc
 
-    # ----------------------------------------------------------- personal-document RAG
+    # ----------------------------------------------------------- personal-document Advanced RAG Lab
+
+    @app.get("/api/rag/embedding-providers")
+    def rag_embedding_providers():
+        return document_rag.embedding_status()
 
     @app.get("/api/p/{pid}/documents")
     def documents(pid: int):
@@ -693,20 +782,38 @@ def create_app(db_path: str | None = None) -> FastAPI:
         name: str | None = Form(default=None),
         chunk_size: int = Form(default=180),
         overlap: int = Form(default=30),
+        embedding_provider: str = Form(default="none"),
+        embedding_model: str | None = Form(default=None),
     ):
         game._player(db, pid)
-        return document_store.add(pid, file.file, file.filename or "document", name, chunk_size, overlap)
+        return document_store.add(
+            pid, file.file, file.filename or "document", name, chunk_size, overlap,
+            embedding_provider=embedding_provider, embedding_model=embedding_model,
+        )
+
+    @app.get("/api/p/{pid}/documents/{document_id}")
+    def document_inspect(pid: int, document_id: str):
+        game._player(db, pid)
+        return document_store.inspect(pid, document_id)
+
+    @app.post("/api/p/{pid}/documents/{document_id}/reindex")
+    def document_reindex(pid: int, document_id: str, body: DocumentReindex):
+        game._player(db, pid)
+        return document_store.reindex(
+            pid, document_id, body.chunk_size, body.overlap, body.embedding_provider, body.embedding_model,
+        )
 
     @app.delete("/api/p/{pid}/documents/{document_id}")
     def delete_document(pid: int, document_id: str):
+        game._player(db, pid)
         if not document_store.delete(pid, document_id):
-            raise game.GameError("Document not found", 404)
+            raise game.GameError("Document not found", 404, "document_not_found")
         return {"ok": True}
 
     @app.post("/api/p/{pid}/personal-rag/query")
     def personal_rag_query(pid: int, body: PersonalRagQuery):
         game._player(db, pid)
-        return document_rag.query(
+        result = document_rag.query(
             db,
             pid,
             body.question,
@@ -715,7 +822,157 @@ def create_app(db_path: str | None = None) -> FastAPI:
             top_k=body.top_k,
             generation=body.generation,
             model=body.model,
+            embedding_provider=body.embedding_provider,
+            embedding_model=body.embedding_model,
+            reranker=body.reranker,
+            reranking_depth=body.reranking_depth,
+            reranker_model=body.reranker_model,
+            rrf_k=body.rrf_k,
+            dense_weight=body.dense_weight,
+            lexical_weight=body.lexical_weight,
+            context_budget=body.context_budget,
+            language=body.language,
         )
+        experiment_id = uuid.uuid4().hex
+        document_ids = body.document_ids or sorted({item["document_id"] for item in result.get("retrieved", [])})
+        config = body.model_dump(exclude={"question", "language"})
+        metrics = {
+            "latency_ms": result.get("latency_ms"),
+            "retrieved_chunks": len(result.get("retrieved", [])),
+            "citation_count": len(result.get("citations", [])),
+            "citation_present": bool(result.get("citations")),
+            "citation_valid": result.get("citation_valid"),
+            "answer_mode": result.get("generation_mode"),
+        }
+        db.x(
+            "INSERT INTO rag_experiments(id, player_id, query, knowledge_base_json, config_json, retrieved_json, answer, citations_json, metrics_json, latency_ms, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (experiment_id, pid, body.question, json.dumps(document_ids), json.dumps(config),
+             json.dumps(result.get("retrieved", []), ensure_ascii=False), result.get("answer", ""),
+             json.dumps(result.get("citation_details", []), ensure_ascii=False), json.dumps(metrics),
+             float(result.get("latency_ms") or 0), time.time()),
+        )
+        result["experiment_id"] = experiment_id
+        return result
+
+    @app.get("/api/p/{pid}/rag/experiments")
+    def rag_experiments(pid: int):
+        game._player(db, pid)
+        rows = db.q("SELECT * FROM rag_experiments WHERE player_id=? ORDER BY created_at DESC LIMIT 100", (pid,))
+        return [
+            {"id": row["id"], "query": row["query"], "knowledge_base": json.loads(row["knowledge_base_json"]),
+             "config": json.loads(row["config_json"]), "answer": row["answer"], "citations": json.loads(row["citations_json"]),
+             "metrics": json.loads(row["metrics_json"]), "retrieved": json.loads(row["retrieved_json"]),
+             "latency_ms": row["latency_ms"], "created_at": row["created_at"]}
+            for row in rows
+        ]
+
+    @app.post("/api/p/{pid}/rag/experiments/compare")
+    def rag_experiment_compare(pid: int, body: RAGExperimentCompare):
+        game._player(db, pid)
+        placeholders = ",".join("?" for _ in body.experiment_ids)
+        rows = db.q(
+            f"SELECT * FROM rag_experiments WHERE player_id=? AND id IN ({placeholders}) ORDER BY created_at",
+            (pid, *body.experiment_ids),
+        )
+        if len(rows) < 2:
+            raise game.GameError("Choose at least two of your saved experiments.", 400, "comparison_requires_two_runs")
+        return {"experiments": [
+            {"id": row["id"], "query": row["query"], "config": json.loads(row["config_json"]),
+             "metrics": json.loads(row["metrics_json"]), "retrieved": json.loads(row["retrieved_json"]),
+             "answer": row["answer"], "citations": json.loads(row["citations_json"]), "created_at": row["created_at"]}
+            for row in rows
+        ]}
+
+    @app.get("/api/p/{pid}/rag/evaluation-datasets")
+    def rag_evaluation_datasets(pid: int):
+        game._player(db, pid)
+        return [
+            {"id": row["id"], "name": row["name"], "case_count": len(json.loads(row["cases_json"])),
+             "created_at": row["created_at"], "updated_at": row["updated_at"]}
+            for row in db.q("SELECT * FROM rag_evaluation_datasets WHERE player_id=? ORDER BY updated_at DESC", (pid,))
+        ]
+
+    @app.post("/api/p/{pid}/rag/evaluation-datasets")
+    def rag_evaluation_dataset_create(pid: int, body: RAGEvaluationDataset):
+        game._player(db, pid)
+        _validate_rag_cases(body.cases)
+        dataset_id = uuid.uuid4().hex
+        now = time.time()
+        db.x(
+            "INSERT INTO rag_evaluation_datasets(id, player_id, name, cases_json, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+            (dataset_id, pid, body.name.strip(), json.dumps(body.cases, ensure_ascii=False), now, now),
+        )
+        return {"id": dataset_id, "name": body.name.strip(), "case_count": len(body.cases), "created_at": now, "updated_at": now}
+
+    @app.get("/api/p/{pid}/rag/evaluation-datasets/{dataset_id}")
+    def rag_evaluation_dataset_detail(pid: int, dataset_id: str):
+        game._player(db, pid)
+        row = db.one("SELECT * FROM rag_evaluation_datasets WHERE id=? AND player_id=?", (dataset_id, pid))
+        if not row:
+            raise game.GameError("RAG evaluation dataset not found.", 404, "rag_evaluation_dataset_not_found")
+        return {"id": row["id"], "name": row["name"], "cases": json.loads(row["cases_json"]), "created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+    @app.put("/api/p/{pid}/rag/evaluation-datasets/{dataset_id}")
+    def rag_evaluation_dataset_update(pid: int, dataset_id: str, body: RAGEvaluationDataset):
+        game._player(db, pid)
+        _validate_rag_cases(body.cases)
+        now = time.time()
+        changed = db.x(
+            "UPDATE rag_evaluation_datasets SET name=?, cases_json=?, updated_at=? WHERE id=? AND player_id=?",
+            (body.name.strip(), json.dumps(body.cases, ensure_ascii=False), now, dataset_id, pid),
+        )
+        if db.one("SELECT 1 FROM rag_evaluation_datasets WHERE id=? AND player_id=?", (dataset_id, pid)) is None:
+            raise game.GameError("RAG evaluation dataset not found.", 404, "rag_evaluation_dataset_not_found")
+        return {"id": dataset_id, "name": body.name.strip(), "case_count": len(body.cases), "updated_at": now}
+
+    @app.delete("/api/p/{pid}/rag/evaluation-datasets/{dataset_id}")
+    def rag_evaluation_dataset_delete(pid: int, dataset_id: str):
+        game._player(db, pid)
+        db.x("DELETE FROM rag_evaluation_datasets WHERE id=? AND player_id=?", (dataset_id, pid))
+        return {"ok": True}
+
+    @app.post("/api/p/{pid}/rag/evaluation-datasets/{dataset_id}/run")
+    def rag_evaluation_dataset_run(pid: int, dataset_id: str, body: RAGEvaluationRun):
+        game._player(db, pid)
+        row = db.one("SELECT * FROM rag_evaluation_datasets WHERE id=? AND player_id=?", (dataset_id, pid))
+        if not row:
+            raise game.GameError("RAG evaluation dataset not found.", 404, "rag_evaluation_dataset_not_found")
+        config = body.config.copy()
+        config.setdefault("top_k", 5)
+        result = document_rag.evaluate_cases(db, pid, json.loads(row["cases_json"]), config)
+        run_id = uuid.uuid4().hex
+        db.x(
+            "INSERT INTO rag_evaluation_runs(id, player_id, dataset_id, experiment_config_json, result_json, created_at) VALUES (?,?,?,?,?,?)",
+            (run_id, pid, dataset_id, json.dumps(config), json.dumps(result, ensure_ascii=False), time.time()),
+        )
+        result["run_id"] = run_id
+        return result
+
+    @app.get("/api/p/{pid}/rag/evaluation-datasets/{dataset_id}/runs")
+    def rag_evaluation_runs(pid: int, dataset_id: str):
+        game._player(db, pid)
+        if db.one("SELECT 1 FROM rag_evaluation_datasets WHERE id=? AND player_id=?", (dataset_id, pid)) is None:
+            raise game.GameError("RAG evaluation dataset not found.", 404, "rag_evaluation_dataset_not_found")
+        return [
+            {"id": row["id"], "config": json.loads(row["experiment_config_json"]), "result": json.loads(row["result_json"]), "created_at": row["created_at"]}
+            for row in db.q("SELECT * FROM rag_evaluation_runs WHERE player_id=? AND dataset_id=? ORDER BY created_at DESC LIMIT 50", (pid, dataset_id))
+        ]
+
+    def _validate_rag_cases(cases: list[dict[str, Any]]) -> None:
+        if len(cases) > 250:
+            raise game.GameError("A RAG evaluation set is limited to 250 cases.", 400, "rag_eval_too_many_cases")
+        for index, case in enumerate(cases):
+            if not isinstance(case, dict) or not str(case.get("question", "")).strip() or len(str(case.get("question", ""))) > 4_000:
+                raise game.GameError(f"Case {index + 1} needs a question of 1–4,000 characters.", 400, "rag_eval_invalid_case")
+            ids = case.get("relevant_chunk_ids", [])
+            if not isinstance(ids, list) or len(ids) > 100 or any(not isinstance(value, str) for value in ids):
+                raise game.GameError(f"Case {index + 1} has invalid relevant_chunk_ids.", 400, "rag_eval_invalid_case")
+            for key in ("expected_document", "reference_answer", "difficulty"):
+                if case.get(key) is not None and len(str(case[key])) > 2_000:
+                    raise game.GameError(f"Case {index + 1} field {key} is too long.", 400, "rag_eval_invalid_case")
+            if case.get("tags") is not None and (not isinstance(case["tags"], list) or len(case["tags"]) > 20):
+                raise game.GameError(f"Case {index + 1} tags must be a list of at most 20 items.", 400, "rag_eval_invalid_case")
 
     # ----------------------------------------------------------- real local-model agent lab
 
@@ -963,6 +1220,20 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/p/{pid}/missions/{mid}")
     def mission_action(pid: int, mid: str, body: Action):
         return game.mission_action(db, pid, mid, body.action, body.payload)
+
+    @app.get("/api/p/{pid}/learning-missions")
+    def learning_missions_list(pid: int):
+        return game.learning_missions_list(db, pid)
+
+    @app.get("/api/p/{pid}/learning-missions/{mid}")
+    def learning_mission_detail(pid: int, mid: str):
+        game._player(db, pid)
+        return game.learning_mission_details(db, pid, mid)
+
+    @app.post("/api/p/{pid}/learning-missions/{mid}")
+    def learning_mission_action(pid: int, mid: str, body: Action):
+        game._player(db, pid)
+        return game.learning_mission_action(db, pid, mid, body.action, body.payload)
 
     @app.get("/api/p/{pid}/challenges")
     def challenges(pid: int):

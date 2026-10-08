@@ -1,0 +1,6 @@
+# Optional local neural embedding / cross-encoder support.
+# This adds CPU-capable Sentence Transformers. It does not download a model automatically.
+# Cache an open model locally before selecting it in the UI; Ollama embeddings are another
+# local option and do not require this extra. See docs/RAG.md for the local-only workflow.
+-r requirements.txt
+sentence-transformers>=3.0,<6

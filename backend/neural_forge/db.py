@@ -9,10 +9,13 @@ import time
 from pathlib import Path
 
 DEFAULT_PATH = Path(os.environ.get("NEURAL_FORGE_DB", Path(__file__).resolve().parent.parent / "neural_forge_data" / "neural_forge.sqlite3"))
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 5
 MIGRATION_NAMES = {
     1: "personal_workspace_tables",
     2: "managed_model_checkpoints",
+    3: "rag_index_experiments_and_tutor_metadata",
+    4: "tutor_context_provenance_for_learning_missions",
+    5: "backfill_existing_document_index_state",
 }
 
 SCHEMA = """
@@ -137,6 +140,80 @@ CREATE TABLE IF NOT EXISTS document_chunks (
   metadata TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_document_chunks_player ON document_chunks(player_id, document_id);
+CREATE TABLE IF NOT EXISTS rag_document_state (
+  document_id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  chunk_size INTEGER NOT NULL DEFAULT 180,
+  overlap INTEGER NOT NULL DEFAULT 30,
+  embedding_provider TEXT,
+  embedding_model TEXT,
+  embedding_status TEXT NOT NULL DEFAULT 'lexical_ready',
+  embedding_error TEXT,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rag_document_state_player ON rag_document_state(player_id, updated_at);
+CREATE TABLE IF NOT EXISTS document_embeddings (
+  chunk_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  player_id INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimension INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  PRIMARY KEY(chunk_id, provider, model)
+);
+CREATE INDEX IF NOT EXISTS idx_document_embeddings_owner ON document_embeddings(player_id, document_id, provider, model);
+CREATE TABLE IF NOT EXISTS rag_experiments (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  query TEXT NOT NULL,
+  knowledge_base_json TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  retrieved_json TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  citations_json TEXT NOT NULL,
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  latency_ms REAL NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rag_experiments_player ON rag_experiments(player_id, created_at);
+CREATE TABLE IF NOT EXISTS rag_evaluation_datasets (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  cases_json TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rag_eval_datasets_player ON rag_evaluation_datasets(player_id, updated_at);
+CREATE TABLE IF NOT EXISTS rag_evaluation_runs (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  dataset_id TEXT NOT NULL,
+  experiment_config_json TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rag_eval_runs_player ON rag_evaluation_runs(player_id, created_at);
+CREATE TABLE IF NOT EXISTS tutor_interactions (
+  id TEXT PRIMARY KEY,
+  player_id INTEGER NOT NULL,
+  concept_id TEXT,
+  mode TEXT NOT NULL,
+  level TEXT NOT NULL,
+  source TEXT NOT NULL,
+  language TEXT NOT NULL,
+  hint_level INTEGER NOT NULL DEFAULT 0,
+  rag_used INTEGER NOT NULL DEFAULT 0,
+  run_id INTEGER,
+  mastery_probability REAL,
+  rag_evidence_count INTEGER NOT NULL DEFAULT 0,
+  feedback TEXT,
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tutor_interactions_player ON tutor_interactions(player_id, created_at);
 CREATE TABLE IF NOT EXISTS prompts (
   id TEXT PRIMARY KEY,
   player_id INTEGER NOT NULL,
@@ -234,6 +311,46 @@ class DB:
             # course can open directly. The migration ledger makes future upgrades
             # explicit and lets diagnostics report the exact on-disk schema level.
             self.conn.executescript(SCHEMA)
+            prior_version = int(self.conn.execute("PRAGMA user_version").fetchone()[0])
+            if prior_version < 4:
+                columns = {row[1] for row in self.conn.execute("PRAGMA table_info(tutor_interactions)").fetchall()}
+                additive_columns = {
+                    "run_id": "INTEGER",
+                    "mastery_probability": "REAL",
+                    "rag_evidence_count": "INTEGER NOT NULL DEFAULT 0",
+                }
+                for column, definition in additive_columns.items():
+                    if column not in columns:
+                        self.conn.execute(f"ALTER TABLE tutor_interactions ADD COLUMN {column} {definition}")
+            if prior_version < 5:
+                legacy_documents = self.conn.execute(
+                    "SELECT d.id, d.player_id, d.original_name, d.format, d.size_bytes, d.text_chars, d.created_at, COUNT(c.id) AS chunk_count "
+                    "FROM documents d LEFT JOIN document_chunks c ON c.document_id=d.id AND c.player_id=d.player_id "
+                    "LEFT JOIN rag_document_state s ON s.document_id=d.id WHERE s.document_id IS NULL GROUP BY d.id"
+                ).fetchall()
+                for document in legacy_documents:
+                    chunk_rows = self.conn.execute(
+                        "SELECT metadata FROM document_chunks WHERE document_id=? AND player_id=?",
+                        (document["id"], document["player_id"]),
+                    ).fetchall()
+                    possible_injection = False
+                    for chunk in chunk_rows:
+                        try:
+                            possible_injection = possible_injection or bool(json.loads(chunk["metadata"]).get("possible_prompt_injection"))
+                        except (AttributeError, TypeError, json.JSONDecodeError):
+                            continue
+                    metadata = {
+                        "original_name": document["original_name"], "format": document["format"],
+                        "size_bytes": document["size_bytes"], "text_chars": document["text_chars"],
+                        "ingested_at": document["created_at"], "chunk_count": document["chunk_count"],
+                        "chunk_size": 180, "overlap": 30, "possible_prompt_injection": possible_injection,
+                        "legacy_index": True,
+                    }
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO rag_document_state(document_id, player_id, metadata_json, chunk_size, overlap, embedding_status, updated_at) "
+                        "VALUES (?,?,?,?,?,'lexical_ready',?)",
+                        (document["id"], document["player_id"], json.dumps(metadata, ensure_ascii=False), 180, 30, document["created_at"]),
+                    )
             for version, name in MIGRATION_NAMES.items():
                 self.conn.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES (?,?,?)",

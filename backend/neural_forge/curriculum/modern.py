@@ -101,6 +101,15 @@ CONCEPTS = [
           Q(3, "A schema says 'priority' ∈ {low, medium, high}. Model outputs 'urgent'. You should…", ["Accept", "Reject/normalise via validation", "Store as is", "Delete the user"], 1, "Validate enums."),
       ]),
 
+    C("personalized_tutoring", "Personalized Tutoring", MA, GF, ["language_models", "grounding"],
+      explain="A personalized tutor can adapt an explanation using the learner's actual saved experiment metrics, mastery estimates, mistakes, review topics and the learner's selected level. It should label uncertainty, never invent history, and use progressive hints without revealing the full answer too early.",
+      analogy="A coach checks the learner's real training log before choosing the next drill; the coach does not invent a personal record.",
+      questions=[
+          Q(1, "The learner has a saved run with a 0.98 training score and a 0.67 test score. A grounded tutor may…", ["Quote those recorded values and explain the gap", "Claim the learner has made the same mistake ten times", "Award mastery from one compliment", "Invent a different test score"], 0, "Use actual stored metrics, and do not add unsupported learner history."),
+          Q(2, "The saved mastery estimate for retrieval is 0.36. How should the tutor use it?", ["Use the recorded estimate to guide a careful explanation without claiming certainty", "Treat it as proof of failure and reset mastery", "Change it to 1.0 because the learner asked", "Invent additional mistakes"], 0, "A mastery estimate guides scaffolding; it is not certainty or permission to invent evidence."),
+          Q(3, "A learner requests hint level 1 of 3. The tutor should…", ["Reveal the full solution", "Give one bounded next-step hint and wait", "Show all later hints automatically", "Change the learner's mastery score"], 1, "Progressive hints preserve learner agency; help feedback is not assessment evidence."),
+      ]),
+
     # ---------------- RAG ----------------
     C("ingestion", "Document Ingestion", RG, RAR, ["datasets", "embeddings"],
       explain="RAG (Retrieval-Augmented Generation) starts by ingesting documents: loading files, extracting clean text, keeping metadata (title, source, date) for citations, "

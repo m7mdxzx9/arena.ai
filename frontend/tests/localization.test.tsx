@@ -25,6 +25,14 @@ describe('localization resources and RTL', () => {
     expect(keys(ar as unknown as Record<string, unknown>)).toEqual(keys(en as unknown as Record<string, unknown>))
   })
 
+  it('translates RAG learning questions and honestly labels simulator methods', () => {
+    expect(ar.ragSimulation.question0).toContain('متى')
+    expect(ar.ragSimulation.unanswerable0).toContain('ForgeNet-Secure')
+    expect(ar.ragSimulation.sourceLanguageNotice).toContain('تبقى بالإنجليزية')
+    expect(en.ragSimulation.lsa).toContain('statistical')
+    expect(en.ragSimulation.rerank).toContain('not neural')
+  })
+
   it('persists Arabic and applies RTL while technical content remains LTR', () => {
     localStorage.setItem('neural-forge-language', 'ar')
     render(<I18nProvider><Probe /></I18nProvider>)
