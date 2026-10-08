@@ -44,7 +44,7 @@ The font stack uses Arabic-capable system fonts (`Noto Sans Arabic`, `Segoe UI`,
 
 ## Current coverage
 
-The application shell, onboarding, campus summary, settings and all newly added personal-lab surfaces use structured English/Arabic resources. RTL layout applies globally, including preserved campaign/lab pages. Some preserved legacy campaign widgets and long pedagogical prose remain authored directly in English; they render safely but are not yet fully translated. This is tracked as **partial localization**, not described as complete Arabic coverage, in the capability matrix.
+The application shell, onboarding, campus summary, settings, new personal-lab surfaces, evidence-based mission UI and Retrieval Warden phases use structured English/Arabic resources. Learning content is included: reviewed Arabic explanations/analogies/questions cover 21 of the current 105 concepts (including Personalized Tutoring and core RAG), and the fixed RAG simulator localizes its benchmark questions, gold answers, controls and diagnoses. Its fictional evidence passages and free-form bigram outputs remain English so the original source/computation can be inspected. RTL layout applies globally, including preserved campaign/lab pages. The remaining legacy curriculum, boss/widget prose and parts of the simulator are still English; therefore localization remains **partial**, not complete Arabic coverage. `/api/system/capabilities` also reports the concept coverage counts, the partial status and the simulator's English source-corpus limitation.
 
 ## Tests
 

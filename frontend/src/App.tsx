@@ -30,6 +30,7 @@ const ModelHub = lazy(() => import('./pages/ModelHub'))
 const TutorPage = lazy(() => import('./pages/Tutor'))
 const MistakesPage = lazy(() => import('./pages/Mistakes'))
 const PersonalRagPage = lazy(() => import('./pages/PersonalRag'))
+const LearningMissionPage = lazy(() => import('./pages/LearningMission'))
 const RealAgentPage = lazy(() => import('./pages/RealAgent'))
 const PromptLabPage = lazy(() => import('./pages/PromptLab'))
 const EvaluationLabPage = lazy(() => import('./pages/EvaluationLab'))
@@ -128,6 +129,7 @@ function Shell() {
     case 'dojo': content = <Dojo key={rest[0] || 'list'} exId={rest[0]} />; break
     case 'missions': content = <Missions />; break
     case 'mission': content = <MissionPage key={rest[0]} id={rest[0]} />; break
+    case 'learning-mission': content = <LearningMissionPage key={rest[0]} id={rest[0]} />; break
     case 'bosses': content = <Bosses />; break
     case 'boss': content = <BossPage key={rest[0]} id={rest[0]} />; break
     case 'research': content = <Research />; break

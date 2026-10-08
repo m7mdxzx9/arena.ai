@@ -6,19 +6,21 @@ Every public function takes a DB and a player id and returns JSON-serialisable d
 from __future__ import annotations
 
 import functools
+import json
 import random
 import time
 
-from . import agent, bosses, code_exercises, datalab, datasets, mastery, missions, mistakes, ml, nn, predictions, rag, sandbox
+from . import agent, bosses, code_exercises, datalab, datasets, learning_missions, mastery, missions, mistakes, ml, nn, predictions, rag, sandbox
 from .curriculum import AREAS, BRANCH_ORDER, CONCEPT_LIST, CONCEPTS, EQUIPMENT, RANKS, depth
 from .curriculum import generators as gen
+from .curriculum.translations_ar import localized_concept, localized_question
 from .db import DB
 
 
 class GameError(Exception):
-    def __init__(self, message: str, status: int = 400):
+    def __init__(self, message: str, status: int = 400, code: str = "application_error"):
         super().__init__(message)
-        self.message, self.status = message, status
+        self.message, self.status, self.code = message, status, code
 
 
 # ------------------------------------------------------------------ achievements
@@ -306,8 +308,9 @@ def lesson(db: DB, pid: int, cid: str) -> dict:
         e = predictions.EXPERIMENTS[c["predict"]]
         pred = dict(id=c["predict"], title=e["title"], setup=e["setup"], question=e["question"], options=e["options"])
     area = AREAS[c["area"]]
-    return dict(concept=dict(id=c["id"], name=c["name"], branch=c["branch"], area=c["area"], explain=c["explain"], analogy=c["analogy"],
-                             visual=c["visual"], example=c["example"], reflect=c["reflect"], code=c["code"], prereqs=c["prereqs"]),
+    c_view = localized_concept(cid, c, p["settings"].get("language", "en"))
+    return dict(concept=dict(id=c["id"], name=c_view["name"], branch=c["branch"], area=c["area"], explain=c_view["explain"], analogy=c_view["analogy"],
+                             visual=c_view["visual"], example=c_view["example"], reflect=c_view["reflect"], code=c_view["code"], prereqs=c["prereqs"]),
                 mentor=dict(name=area["mentor"], area=area["name"], icon=area["icon"], color=area["color"]),
                 plan=dict(kind=plan["kind"], message=plan["message"], cards=cards),
                 state=dict(p=round((st or {}).get("p", mastery.P_INIT), 3), status=mastery.status(st, True), attempts=(st or {}).get("attempts", 0)),
@@ -326,6 +329,16 @@ def _item_from_key(cid: str, key: str) -> dict:
             raise GameError("Bad item")
         return gen.generate(name, d, seed)
     raise GameError("Bad item")
+
+
+def _localized_question(cid: str, key: str, q: dict, language: str) -> dict:
+    if not key.startswith("s:"):
+        return q
+    try:
+        index = int(key.split(":", 1)[1])
+    except ValueError:
+        return q
+    return localized_question(cid, q, language, index)
 
 
 def next_question(db: DB, pid: int, cid: str, purpose: str = "practice") -> dict:
@@ -355,16 +368,23 @@ def next_question(db: DB, pid: int, cid: str, purpose: str = "practice") -> dict
         near = sorted(range(len(qs)), key=lambda i: (abs(qs[i]["difficulty"] - target), f"s:{i}" in seen[:3], random.random()))
         key, q = f"s:{near[0]}", qs[near[0]]
     mode = mastery.MODES[p["mode"]]
-    out = dict(key=key, type=q["type"], difficulty=q["difficulty"], prompt=q["prompt"], purpose=purpose,
+    q_view = _localized_question(cid, key, q, p["settings"].get("language", "en"))
+    c_view = localized_concept(cid, c, p["settings"].get("language", "en"))
+    out = dict(key=key, type=q["type"], difficulty=q["difficulty"], prompt=q_view["prompt"], purpose=purpose,
                hints=mode["hints"], hint_available=mode["hints"] != "none", hint_cost=mode["hint_cost"])
     if q["type"] == "mcq":
-        out["options"] = q["options"]
+        out["options"] = q_view["options"]
     if purpose == "guided" and mode["hints"] != "none":
-        out["hint"] = _hint_text(c, q)  # guided practice: hint is part of the scaffold, no penalty
+        out["hint"] = _hint_text(c_view, q_view)  # guided practice: hint is part of the scaffold, no penalty
     return out
 
 
 def _hint_text(c: dict, q: dict) -> str:
+    arabic = any("\u0600" <= char <= "\u06ff" for char in c.get("explain", ""))
+    if q.get("hint") and (not arabic or any("\u0600" <= char <= "\u06ff" for char in q["hint"])):
+        return q["hint"]
+    if arabic:
+        return "ابدأ بتحديد الفكرة الأساسية، ثم لاحظ أي معلومة تمثل دليلًا وأيها تمثل النتيجة التي نريد توقعها."
     if q.get("hint"):
         return q["hint"]
     if c["analogy"]:
@@ -375,8 +395,11 @@ def _hint_text(c: dict, q: dict) -> str:
 def hint(db: DB, pid: int, cid: str, key: str) -> dict:
     p = _player(db, pid)
     if mastery.MODES[p["mode"]]["hints"] == "none":
-        raise GameError("Hints are disabled in Research Challenge mode.")
-    return dict(hint=_hint_text(CONCEPTS[cid], _item_from_key(cid, key)), cost=mastery.MODES[p["mode"]]["hint_cost"])
+        raise GameError("Hints are disabled in Research Challenge mode.", code="hints_disabled")
+    language = p["settings"].get("language", "en")
+    question = _localized_question(cid, key, _item_from_key(cid, key), language)
+    concept = localized_concept(cid, CONCEPTS[cid], language)
+    return dict(hint=_hint_text(concept, question), cost=mastery.MODES[p["mode"]]["hint_cost"])
 
 
 def _grade(q: dict, response) -> bool:
@@ -394,6 +417,9 @@ def answer(db: DB, pid: int, cid: str, key: str, response, hint_used: bool = Fal
     if not c:
         raise GameError("Unknown concept", 404)
     q = _item_from_key(cid, key)
+    language = p["settings"].get("language", "en")
+    q_view = _localized_question(cid, key, q, language)
+    c_view = localized_concept(cid, c, language)
     correct = _grade(q, response)
     scaffolded = purpose == "guided"
     ev = evidence(db, pid, cid, q, correct, hint_used and not scaffolded, kind="question", key=key)
@@ -403,7 +429,7 @@ def answer(db: DB, pid: int, cid: str, key: str, response, hint_used: bool = Fal
     bonus = 5 if correct and settings["streak"] % 3 == 0 else 0
     db.update_player(pid, settings=settings)
     if xp + bonus:
-        db.add_xp(pid, xp + bonus, f"{c['name']}: correct answer" + (" (+streak)" if bonus else ""))
+        db.add_xp(pid, xp + bonus, f"{c_view['name']}: correct answer" + (" (+streak)" if bonus else ""))
     new_ach: list = []
     if correct:
         _grant(db, pid, "first_steps", new_ach)
@@ -413,15 +439,15 @@ def answer(db: DB, pid: int, cid: str, key: str, response, hint_used: bool = Fal
     st = ev["state"]
     adapt = None
     if st.get("struggling"):
-        adapt = "This concept seems tricky right now — next, a simpler explanation, a visual and an easier question. We'll come back to the harder one."
+        adapt = "يبدو أن هذا المفهوم يحتاج إلى تدريب إضافي؛ سنقدّم شرحًا أبسط وسؤالًا أسهل ثم نعود إلى المستوى الأصعب." if language == "ar" else "This concept seems tricky right now — next, a simpler explanation, a visual and an easier question. We'll come back to the harder one."
     elif st.get("retry_pending"):
-        adapt = "Nice recovery! Next you'll retry a question at the level you missed earlier."
+        adapt = "أحسنت التعافي. ستعود الآن إلى سؤال بالمستوى الذي واجهت فيه صعوبة." if language == "ar" else "Nice recovery! Next you'll retry a question at the level you missed earlier."
     elif mastery.status(st, True) == "mastered":
-        adapt = "Mastered — from now on you'll get hard questions only, and this concept enters spaced review."
+        adapt = "أتقنت المفهوم؛ ستنتقل إلى أسئلة أصعب، وسيعود للمراجعة المتباعدة." if language == "ar" else "Mastered — from now on you'll get hard questions only, and this concept enters spaced review."
     auto_hint = (not correct and mastery.MODES[p["mode"]]["hints"] == "auto")
-    return dict(correct=correct, explanation=q["explanation"], answer=q["answer"],
-                answer_text=q["options"][q["answer"]] if q["type"] == "mcq" else str(q["answer"]),
-                hint=_hint_text(c, q) if auto_hint else None,
+    return dict(correct=correct, explanation=q_view["explanation"], answer=q["answer"],
+                answer_text=q_view["options"][q["answer"]] if q["type"] == "mcq" else str(q["answer"]),
+                hint=_hint_text(c_view, q_view) if auto_hint else None,
                 xp=xp + bonus + ev["xp"], streak=settings["streak"], p_before=round(st["p"] - st["delta"], 3), p=round(st["p"], 3),
                 status=ev["status"], struggling=bool(st.get("struggling")), adaptation=adapt, events=ev["events"], unlocked=ev["unlocked"],
                 achievements=new_ach, next_difficulty=mastery.target_difficulty(st, p["mode"]))
@@ -593,7 +619,155 @@ def missions_list(db: DB, pid: int) -> list[dict]:
         unlocked = p["settings"].get("free_play") or all(states.get(r, {}).get("p", 0) >= mastery.UNLOCK for r in m["requires"])
         out.append(dict(id=m["id"], title=m["title"], area=m["area"], dataset=m["dataset"], xp=m["xp"], requires=[dict(id=r, name=CONCEPTS[r]["name"]) for r in m["requires"]],
                         unlocked=bool(unlocked), completed=bool(prog.get(m["id"], {}).get("completed_at")), step=prog.get(m["id"], {}).get("step", 0)))
+    out.extend(learning_missions_list(db, pid))
     return out
+
+
+def _learning_mission_experiment(db: DB, player_id: int, experiment_id: str) -> dict | None:
+    row = db.one("SELECT * FROM rag_experiments WHERE id=? AND player_id=?", (experiment_id, player_id))
+    if not row:
+        return None
+    return {
+        "id": row["id"], "query": row["query"], "knowledge_base": json.loads(row["knowledge_base_json"]),
+        "config": json.loads(row["config_json"]), "retrieved": json.loads(row["retrieved_json"]),
+        "citations": json.loads(row["citations_json"]), "metrics": json.loads(row["metrics_json"]),
+    }
+
+
+def _learning_mission_valid_citations(experiment: dict) -> list[dict]:
+    retrieved_ids = {item.get("id") for item in experiment.get("retrieved", []) if item.get("id")}
+    return [item for item in experiment.get("citations", []) if item.get("chunk_id") in retrieved_ids]
+
+
+def _hint_ladder_progress(db: DB, player_id: int) -> dict:
+    rows = db.q(
+        "SELECT concept_id, hint_level, run_id, mastery_probability FROM tutor_interactions "
+        "WHERE player_id=? AND mode='hint' AND hint_level BETWEEN 1 AND 3 AND concept_id IS NOT NULL ORDER BY created_at DESC",
+        (player_id,),
+    )
+    by_concept: dict[str, dict[int, Any]] = {}
+    for row in rows:
+        item = by_concept.setdefault(row["concept_id"], {})
+        item.setdefault(int(row["hint_level"]), row)
+    candidates = []
+    for concept_id, levels in by_concept.items():
+        context_levels = {level for level, row in levels.items() if row["run_id"] is not None and row["mastery_probability"] is not None}
+        candidates.append({
+            "concept_id": concept_id,
+            "levels": sorted(levels),
+            "context_levels": sorted(context_levels),
+            "run_id": next((levels[level]["run_id"] for level in sorted(levels, reverse=True) if levels[level]["run_id"] is not None), None),
+            "mastery_probability": next((levels[level]["mastery_probability"] for level in sorted(levels, reverse=True) if levels[level]["mastery_probability"] is not None), None),
+        })
+    candidates.sort(key=lambda item: (len(item["context_levels"]), len(item["levels"])), reverse=True)
+    best = candidates[0] if candidates else {"concept_id": None, "levels": [], "context_levels": [], "run_id": None, "mastery_probability": None}
+    return {**best, "complete": best["context_levels"] == [1, 2, 3]}
+
+
+def learning_mission_details(db: DB, player_id: int, mission_id: str) -> dict:
+    mission = learning_missions.BY_ID.get(mission_id)
+    if not mission:
+        raise GameError("Unknown learning mission.", 404, "learning_mission_not_found")
+    state = db.progress(player_id, "learning_mission").get(mission_id, {})
+    details = {**mission, "state": state, "completed": bool(state.get("completed_at")), "experiments": []}
+    if mission_id in {"rag_compare", "rag_grounding"}:
+        rows = db.q("SELECT id, query, knowledge_base_json, config_json, retrieved_json, citations_json, metrics_json FROM rag_experiments WHERE player_id=? ORDER BY created_at DESC LIMIT 100", (player_id,))
+        for row in rows:
+            config = json.loads(row["config_json"])
+            retrieved = json.loads(row["retrieved_json"])
+            citations = json.loads(row["citations_json"])
+            valid_citations = [item for item in citations if item.get("chunk_id") in {chunk.get("id") for chunk in retrieved}]
+            details["experiments"].append({
+                "id": row["id"], "query": row["query"], "method": config.get("method"),
+                "embedding_provider": config.get("embedding_provider"), "reranker": config.get("reranker"),
+                "knowledge_base": json.loads(row["knowledge_base_json"]), "retrieved_count": len(retrieved),
+                "citation_count": len(valid_citations), "metrics": json.loads(row["metrics_json"]),
+            })
+    if mission_id == "rag_compare":
+        details["completed_query_runs"] = sum(1 for item in details["experiments"] if item["retrieved_count"] > 0)
+    elif mission_id == "rag_grounding":
+        details["cited_runs"] = sum(1 for item in details["experiments"] if item["retrieved_count"] > 0 and item["citation_count"] > 0)
+    elif mission_id == "tutor_hint_ladder":
+        details["hint_ladder"] = _hint_ladder_progress(db, player_id)
+        details["saved_runs"] = len(db.runs(player_id, limit=200))
+    return details
+
+
+def learning_missions_list(db: DB, player_id: int) -> list[dict]:
+    _player(db, player_id)
+    out = []
+    for mission in learning_missions.MISSIONS:
+        state = db.progress(player_id, "learning_mission").get(mission["id"], {})
+        item = {**mission, "unlocked": True, "completed": bool(state.get("completed_at")), "state": state}
+        if mission["id"] == "rag_compare":
+            item["step"] = learning_mission_details(db, player_id, mission["id"])["completed_query_runs"]
+        elif mission["id"] == "rag_grounding":
+            item["step"] = learning_mission_details(db, player_id, mission["id"])["cited_runs"]
+        else:
+            item["step"] = len(learning_mission_details(db, player_id, mission["id"])["hint_ladder"]["context_levels"])
+        out.append(item)
+    return out
+
+
+def learning_mission_action(db: DB, player_id: int, mission_id: str, action: str, payload: dict) -> dict:
+    mission = learning_missions.BY_ID.get(mission_id)
+    if not mission:
+        raise GameError("Unknown learning mission.", 404, "learning_mission_not_found")
+    if action != "complete":
+        raise GameError("Unknown learning mission action.", 400, "unknown_mission_action")
+    current = db.progress(player_id, "learning_mission").get(mission_id, {})
+    if current.get("completed_at"):
+        return {"ok": True, "passed": True, "already_completed": True, "xp": 0, "state": current, "checks": []}
+
+    if mission_id == "rag_compare":
+        ids = payload.get("experiment_ids")
+        if not isinstance(ids, list) or len(ids) != 2 or len(set(map(str, ids))) != 2:
+            raise GameError("Select exactly two saved RAG experiments.", 400, "mission_requires_two_experiments")
+        first, second = (_learning_mission_experiment(db, player_id, str(value)) for value in ids)
+        if not first or not second:
+            raise GameError("Both experiments must belong to your workspace.", 404, "experiment_not_found")
+        same_question = " ".join(first["query"].casefold().split()) == " ".join(second["query"].casefold().split())
+        same_sources = sorted(first["knowledge_base"]) == sorted(second["knowledge_base"]) and bool(first["knowledge_base"])
+        different_methods = first["config"].get("method") != second["config"].get("method")
+        has_results = bool(first["retrieved"]) and bool(second["retrieved"])
+        checks = [
+            {"key": "same_question", "passed": same_question}, {"key": "same_sources", "passed": same_sources},
+            {"key": "different_methods", "passed": different_methods}, {"key": "retrieved_evidence", "passed": has_results},
+        ]
+        if not all(item["passed"] for item in checks):
+            return {"ok": True, "passed": False, "checks": checks, "state": current}
+        proof = {"experiment_ids": [first["id"], second["id"]], "methods": [first["config"].get("method"), second["config"].get("method")], "query": first["query"]}
+    elif mission_id == "rag_grounding":
+        experiment = _learning_mission_experiment(db, player_id, str(payload.get("experiment_id", "")))
+        if not experiment:
+            raise GameError("Select a saved RAG experiment from your workspace.", 404, "experiment_not_found")
+        valid_citations = _learning_mission_valid_citations(experiment)
+        checks = [
+            {"key": "retrieved_evidence", "passed": bool(experiment["retrieved"])},
+            {"key": "citation_matches_retrieved_chunk", "passed": bool(valid_citations)},
+        ]
+        if not all(item["passed"] for item in checks):
+            return {"ok": True, "passed": False, "checks": checks, "state": current}
+        proof = {"experiment_id": experiment["id"], "citation_chunk_ids": [item["chunk_id"] for item in valid_citations]}
+    else:
+        ladder = _hint_ladder_progress(db, player_id)
+        checks = [
+            {"key": "same_concept_progressive_hints", "passed": ladder["levels"] == [1, 2, 3]},
+            {"key": "actual_saved_run_context", "passed": ladder["context_levels"] == [1, 2, 3] and ladder["run_id"] is not None},
+        ]
+        if not all(item["passed"] for item in checks):
+            return {"ok": True, "passed": False, "checks": checks, "state": current, "hint_ladder": ladder}
+        proof = {"concept_id": ladder["concept_id"], "hint_levels": ladder["context_levels"], "run_id": ladder["run_id"], "mastery_probability": ladder["mastery_probability"]}
+
+    db.add_xp(player_id, mission["xp"], f"Learning mission complete: {mission['id']}")
+    mastery_events = [evidence(db, player_id, concept_id, {"type": "experiment", "difficulty": 2}, True, kind="mission", key=mission_id) for concept_id in mission["concepts"]]
+    achievements: list = []
+    _grant(db, player_id, "mission_first", achievements)
+    _check_counts(db, player_id, achievements)
+    mastery_xp = sum(event["xp"] for event in mastery_events)
+    state = {"step": 1, "proof": proof, "completed_at": time.time()}
+    db.set_progress(player_id, "learning_mission", mission_id, state, completed=True)
+    return {"ok": True, "passed": True, "checks": checks, "state": state, "proof": proof, "xp": mission["xp"] + mastery_xp, "achievements": achievements}
 
 
 @functools.lru_cache(maxsize=32)
@@ -760,7 +934,16 @@ def boss_action(db: DB, pid: int, bid: str, payload: dict) -> dict:
         raise GameError("Already defeated. Restart to fight again.")
     ph = b["phases"][st["phase"]]
     result = config = None
-    if ph["kind"] not in ("mcq", "select"):
+    if ph["kind"] == "rag_real":
+        experiment = _learning_mission_experiment(db, pid, str(payload.get("experiment_id", "")))
+        if not experiment:
+            raise GameError("Select a saved personal RAG experiment.", 404, "experiment_not_found")
+        experiment["owned_document_rows"] = db.q(
+            "SELECT id FROM documents WHERE player_id=? AND id IN (" + ",".join("?" for _ in experiment["knowledge_base"]) + ")",
+            (pid, *experiment["knowledge_base"]),
+        ) if experiment["knowledge_base"] else []
+        result, config = experiment, experiment["config"]
+    elif ph["kind"] not in ("mcq", "select"):
         run = db.run(pid, int(payload.get("run_id", 0)))
         if not run or run["kind"] != ph["kind"]:
             raise GameError(f"Submit a {ph['kind']} run for this phase.")

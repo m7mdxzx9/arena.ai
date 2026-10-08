@@ -1,84 +1,51 @@
 # Change Manifest
 
-## Delivery identity
+**Status date:** 2026-10-08 (Asia/Riyadh)
+**Repository:** `m7mdxzx9/arena.ai`
+**Working branch:** `arena/667d59d2-arena-ai`
+**Branch base:** `75bf761ef5a318259b674086ca1a20fee7d45482`
+**Upgrade strategy:** additive changes in the existing repository; the campaign, stored player progression, APIs and existing educational labs were preserved.
 
-- Date: **2026-10-07**
-- Repository: `m7mdxzx9/arena.ai`
-- Branch: `arena/d8508d0d-arena-ai`
-- Preserved base commit: `e26537851e5e4450807dacab014d79ea58095b4f`
-- Strategy: additive in-place upgrade; no repository rewrite or progress reset
+## Scope delivered in this workspace
 
-## Filesystem delta
-
-Counted with Git (`git ls-tree` for the base and `git ls-files --cached --others --exclude-standard` for delivery):
-
-| Measure | Before | After | Delta |
-|---|---:|---:|---:|
-| Non-ignored repository files | 85 | 137 | +52 |
-| Text lines across those files | 14,430 | 20,706 | +6,276 |
-
-The working tree contained 13 modified tracked files and 52 new non-ignored files before the delivery commit. Generated `.venv`, `node_modules`, `dist`, SQLite data and caches are ignored and excluded.
+- Added **Personalized Tutoring** under Modern AI, after Structured Output and before RAG. Its curriculum explanation and three questions cover actual saved history, mastery estimates, and progressive hints.
+- Expanded the bilingual experience with reviewed Arabic learning material for 21 of 105 concepts, bilingual RAG/Tutor learning missions and retrieval-boss phases, Arabic RAG simulator controls/diagnoses/benchmark questions and gold answers, structured API error localization, and explicit RTL/LTR handling. Overall legacy Arabic coverage remains partial.
+- Kept the **RAG Learning Simulator** and **Advanced Personal RAG Lab** distinct. The simulator uses a fixed fictional English corpus and transparently labelled TF-IDF/LSA, 32-feature hashing, BM25 and lexical-overlap heuristic reranking. The Advanced Lab works on owned player documents and supports inspectable local retrieval, citations, saved experiments, and optional local neural providers.
+- Added cached local Sentence Transformers/Ollama embedding providers and an optional local cross-encoder path for Advanced RAG; statistical LSA and lexical retrieval remain clearly labelled fallbacks. No automatic model download or hosted document processing is used.
+- Personalized the offline/optional-local Tutor using the player's real mastery estimates, run metrics/configuration, mistake patterns and due-review state. No-answer/progressive-hint behavior is preserved; feedback does not change BKT; raw question/answer transcripts are not persisted.
+- Added evidence-checked side missions for comparing retrieval, citation grounding and contextual Tutor hints. Completion checks persisted experiments/interactions, rejects cross-player experiments and awards XP idempotently.
+- Extended the Retrieval Warden without replacing the training phases: its final phase requires a saved personal RAG experiment with a player-owned document, retrieved evidence, a citation matching a retrieved chunk and a documented strategy.
+- Updated documentation and capability metadata to state current functionality and remaining limitations. Added schema v5 backfills for pre-existing personal-document indexes and preserves older Tutor interaction rows; backend regression tests exercise both migrations and the new flows, with localized API-error unit tests.
 
 ## Preserved systems
 
-Profiles/settings, campaign areas, 104-concept tree, procedural questions, XP/ranks/equipment, achievements, BKT, Leitner review, missions, bosses, prediction lab, Data Lab, scikit-learn workbench/history, NumPy NN, Code Dojo, research challenges, NLP widgets, educational RAG and deterministic agent-security simulator remain connected.
+Existing profiles, campaign areas and the original 104-concept progression remain in place; the tree now has 105 concepts after the additive Personalized Tutoring entry. XP/ranks/equipment, achievements, BKT, spaced review, missions, boss fights, datasets, ML workbench, NumPy/PyTorch labs, existing APIs and saved progression remain in place. The new evidence-based missions and boss phase are additive.
 
-## Added backend systems
+## Verification on the current source tree
 
-- secure player-owned CSV/TSV/JSON/XLSX dataset store and uploaded-data ML path;
-- deterministic top-five labelled-score utility;
-- real optional PyTorch MLP and Conv2d engines, CPU/CUDA reporting, curves, generated checkpoints, augmentation, confusion/prediction/feature-map outputs;
-- bounded provider protocol and local Ollama discovery/chat/structured output;
-- offline/local tutor and experiment-derived Mistake Journal;
-- PDF/TXT/Markdown/DOCX personal RAG with bounded extraction, hybrid retrieval, citations, injection flags and optional grounded generation;
-- controlled real agent loop with fixed schema tools, permissions, timeouts, bounded visible memory and action traces;
-- agent-vs-agent arena with identical tasks, deterministic phrase/completion scoring and measured step/latency comparison;
-- persistent prompt versioning and central deterministic evaluation datasets;
-- experiment-grounded portfolio and escaped Markdown/HTML/JSON exports;
-- versioned, recursively redacted, atomic merge backup/restore;
-- runtime capabilities endpoint and structured request logging/error responses;
-- additive SQLite tables/settings compatible with existing records.
-
-## Added frontend systems
-
-- structured English/Arabic provider and resources, persisted language, document RTL and technical LTR isolation;
-- localized shell/onboarding/campus/settings and all new workspace surfaces;
-- Open Lab, Dataset Workspace, PyTorch/CNN, Model Hub, Tutor, Mistakes, Personal RAG, Real Agent/Arena, Prompt Lab, Evaluation Lab, Portfolio and Backup/Restore routes;
-- responsive lab/RTL styling;
-- safe unknown-error formatter and typed application errors;
-- lazy-loaded new labs, reducing the primary production JS chunk from the warning threshold to about 393.90 kB before gzip.
-
-## Engineering and deployment artifacts
-
-- required architecture, learning, adaptive, ML, PyTorch, RAG, agent, security, localization and testing documentation;
-- engineering fingerprint, signature, micro-benchmark and capability matrix;
-- non-root multi-stage `Dockerfile`, `compose.yaml`, persistent data volume and healthcheck;
-- focused backend integration/security/real-training tests and frontend API/localization tests.
-
-## Final verification on delivered source
-
-| Command/check | Result |
+| Check | Result |
 |---|---|
-| `backend/.venv/bin/python -m pytest -q` | **117 passed**, 0 failed, 1 Starlette deprecation warning, 31.26 s |
-| `frontend/npm run test:ui` | **4 files passed, 11 tests passed**, 0 failed, 23.90 s |
-| `frontend/npm run lint` | **0 errors, 22 warnings** (same count as baseline; Fast Refresh/effect warnings in preserved files) |
-| `frontend/npm run build` | passed, 63 modules transformed; primary JS 393.90 kB / 116.88 kB gzip plus lazy chunks |
-| focused API/localization Vitest run | 2 files passed, 4 tests passed |
-| backend `pip check` | no broken requirements |
-| frontend `npm audit --audit-level=low` | 0 vulnerabilities |
-| `git diff --check` | passed |
-| app construction | 84 routes |
-| live `GET /api/health` | `{"ok":true}` |
-| live capability smoke | PyTorch 2.14.1+cu130 installed; CUDA false/0 devices; Ollama explicitly unavailable |
-| micro-benchmark | 25,000 records × 25; 2.807 ms median, 3.651 ms p95 |
+| Backend: `PYTHONPATH=. .venv/bin/python -m pytest -q` | **138 passed, 4 skipped**, one Starlette `TestClient` deprecation warning |
+| Frontend: `npm run test:ui` against a temporary local API | **4 files passed, 13 tests passed**, including route/widget smoke and gameplay flows |
+| Localization/API unit assertions in that run | **6 passed** across `localization.test.tsx` and `api.test.ts` |
+| Frontend lint: `npm run lint` | **0 errors, 22 warnings**; not warning-free |
+| Frontend build: `npm run build` | TypeScript passed; Vite built successfully, 65 modules transformed |
+| Backend dependency consistency: `.venv/bin/pip check` | No broken requirements |
+| `git diff --check` | Passed |
+| Live Ollama / cached model / CUDA / Docker image verification | Not available or not run; no live-provider, CUDA or Docker-build success is claimed |
 
-Docker syntax/artifacts were inspected, but a Docker daemon/CLI was unavailable in the workspace, so no image-build result is claimed.
+The UI tests used a temporary backend database and asset directories, not the user's normal profile store. Run the commands in `docs/TESTING.md` after any further source edits.
 
-## Disclosed limitations
+## Deliberately disclosed limitations
 
-- Some preserved legacy campaign/widget prose remains English. New surfaces, shell/settings and RTL infrastructure are bilingual; the matrix labels overall Arabic content coverage **partial**, not complete.
-- Authentication and hostile multi-tenant deployment are absent by design; this remains a local single-user application.
-- Ollama was not reachable in the verification environment. Provider-dependent paths are tested with deterministic fake-provider boundaries and fail explicitly at runtime.
-- CUDA was unavailable; genuine PyTorch tests executed on CPU.
-- Portable JSON backup excludes dataset/document binaries and checkpoints and records this in its manifest.
-- LLM-as-judge is not presented; evaluation and arena scoring are deterministic and explicitly labelled.
+- Arabic learning content is broader than menu localization but incomplete: 21 of 105 concepts have reviewed Arabic teaching/questions, the simulator's fixed source passages and free-form bigram outputs stay English, and legacy campaign/widgets still contain English text.
+- The simulator is educational and statistically implemented; it is not neural RAG. Advanced Lab neural embeddings/cross-encoder and local-LLM answering require a suitable local dependency/model/Ollama installation.
+- The local environment did not verify live Ollama, CUDA or Docker image execution. Local-only provider behavior has deterministic tests, not a live model claim.
+- Authentication and hostile multi-tenant deployment are absent; this remains a local single-user learning application.
+- Scanned PDFs have no OCR and complex document layout is flattened.
+
+## Project archive
+
+`neural-forge-phase1-complete.zip` contains the 149 non-ignored project files from this working tree, including modified and newly added source/tests/docs. `.git`, Python virtual environments, `node_modules`, compiled `dist` output and local databases are excluded. The archive is **519,098 bytes**. ZIP CRC/integrity and required-file membership checks passed for the packaged tree.
+
+See `CAPABILITY_MATRIX.md`, `docs/RAG.md`, `docs/TUTOR.md`, `docs/LOCALIZATION.md` and `docs/TESTING.md` for details.

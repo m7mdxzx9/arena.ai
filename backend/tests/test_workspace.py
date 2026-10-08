@@ -24,9 +24,31 @@ def test_additive_schema_migration_preserves_legacy_profile(tmp_path):
     connection.commit(); connection.close()
     db = DB(path)
     assert db.player(1)["name"] == "Legacy" and db.player(1)["xp"] == 345
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
-    assert [row["version"] for row in db.q("SELECT version FROM schema_migrations ORDER BY version")] == [1, 2]
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert [row["version"] for row in db.q("SELECT version FROM schema_migrations ORDER BY version")] == [1, 2, 3, 4, 5]
+    assert {row["name"] for row in db.q("PRAGMA table_info(tutor_interactions)")} >= {"run_id", "mastery_probability", "rag_evidence_count"}
     assert db.one("SELECT name FROM sqlite_master WHERE type='table' AND name='model_checkpoints'") is not None
+
+
+def test_v4_legacy_documents_receive_lexical_index_state_without_data_loss(tmp_path):
+    path = tmp_path / "legacy-documents.sqlite3"
+    db = DB(path)
+    player_id = db.create_player("Legacy document owner")
+    root = tmp_path / "documents"
+    store = document_rag.DocumentStore(db, root=root)
+    document = store.add(player_id, b"Legacy document chunk with a preserved source passage.", "legacy.txt")
+    db.x("DELETE FROM rag_document_state WHERE document_id=?", (document["id"],))
+    db.conn.execute("PRAGMA user_version=4")
+    db.conn.commit()
+    db.conn.close()
+
+    migrated = DB(path)
+    recovered = document_rag.DocumentStore(migrated, root=root).get(player_id, document["id"])
+    assert recovered["id"] == document["id"]
+    assert recovered["chunks"] == document["chunks"] > 0
+    assert recovered["embedding_status"] == "lexical_ready"
+    assert recovered["chunk_size"] == 180 and recovered["overlap"] == 30
+    assert migrated.conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_top_five_scores_filters_groups_and_sorts():
@@ -152,7 +174,19 @@ def test_capabilities_endpoint_exposes_no_environment_or_paths(client):
     response = client.get("/api/system/capabilities")
     assert response.status_code == 200
     body = response.json()
-    assert body["localization"] == {"languages": ["en", "ar"], "arabic_rtl": True}
+    assert body["localization"]["languages"] == ["en", "ar"]
+    assert body["localization"]["arabic_rtl"] is True
+    assert body["localization"]["coverage"] == "partial"
+    assert body["localization"]["curriculum_concepts"] == 105
+    assert body["localization"]["reviewed_arabic_concepts"] == 21
+    assert body["localization"]["simulator_source_language"] == "en"
+    simulator = body["rag"]["learning_simulator_details"]
+    assert simulator["neural_embeddings"] is False and simulator["reranker"] == "lexical_overlap_heuristic"
+    assert simulator["source_language"] == simulator["free_form_outputs_language"] == "en"
+    assert body["rag"]["personal_documents"] is True
+    assert body["tutor"]["player_state_personalization"] is True
+    assert body["tutor"]["raw_questions_and_answers_persisted"] is False
+    assert body["learning_missions"]["retrieval_boss_personal_evidence_phase"] is True
     rendered = str(body).lower()
     assert "password" not in rendered and "token" not in rendered and "/home/" not in rendered
 

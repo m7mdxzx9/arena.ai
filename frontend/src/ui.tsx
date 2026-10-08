@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { get, type Any } from './api'
+import { get, localizedApiError, type Any } from './api'
+import { useI18n } from './i18n'
 
 // ------------------------------------------------------------------ router (hash based, no dependency)
 export function useRoute(): string[] {
@@ -59,9 +60,9 @@ export function Toasts({ toasts }: { toasts: Toast[] }) {
 }
 
 // ------------------------------------------------------------------ data hook
-export function useApi<T = Any>(url: string | null, deps: unknown[] = []): { data: T | null; error: string | null; loading: boolean; reload: () => void; setData: (d: T) => void } {
+export function useApi<T = Any>(url: string | null, deps: unknown[] = []): { data: T | null; error: unknown | null; loading: boolean; reload: () => void; setData: (d: T) => void } {
   const [data, setData] = useState<T | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<unknown | null>(null)
   const [loading, setLoading] = useState(false)
   const [tick, setTick] = useState(0)
   useEffect(() => {
@@ -71,7 +72,7 @@ export function useApi<T = Any>(url: string | null, deps: unknown[] = []): { dat
     setError(null)
     get(url)
       .then((d) => alive && setData(d))
-      .catch((e) => alive && setError(e.message))
+      .catch((e) => alive && setError(e))
       .finally(() => alive && setLoading(false))
     return () => {
       alive = false
@@ -125,7 +126,10 @@ export const Loading = ({ text = 'Loading…' }: { text?: string }) => (
   </div>
 )
 
-export const ErrorBox = ({ error }: { error: string | null }) => (error ? <div className="error-box">⚠️ {error}</div> : null)
+export function ErrorBox({ error }: { error: unknown | null }) {
+  const { t } = useI18n()
+  return error ? <div className="error-box" role="alert">⚠️ {localizedApiError(error, t)}</div> : null
+}
 
 export function Mentor({ name, icon, children, color }: { name: string; icon?: string; children: ReactNode; color?: string }) {
   return (

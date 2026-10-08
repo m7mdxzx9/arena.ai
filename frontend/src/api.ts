@@ -45,6 +45,24 @@ export function formatApiError(error: unknown, fallback = 'Something went wrong.
   }
 }
 
+/** Resolve stable backend error codes through the active UI locale, with a safe fallback. */
+export function localizedApiError(error: unknown, translate: (key: string) => string): string {
+  try {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : ''
+    if (code) {
+      const key = `errors.${code}`
+      const translated = translate(key)
+      if (translated !== key) return translated
+    }
+    const message = formatApiError(error, '')
+    return message || translate('errors.application_error')
+  } catch {
+    return translate('errors.application_error')
+  }
+}
+
 async function decodeResponse(res: Response): Promise<unknown> {
   const type = res.headers.get('content-type') || ''
   const text = await res.text()
